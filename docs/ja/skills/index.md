@@ -71,15 +71,6 @@ permalink: /ja/skills/
 | [US Stock Analysis]({{ '/ja/skills/us-stock-analysis/' | relative_url }}) ★ | Comprehensive US stock analysis including fundamental analysis (financial metrics, business quality, valuation), tech... | <span class="badge badge-free">API不要</span> |
 | [Value Dividend Screener]({{ '/ja/skills/value-dividend-screener/' | relative_url }}) | Screen US stocks for high-quality dividend opportunities combining value characteristics (P/E ratio under 20, P/B rat... | <span class="badge badge-api">FMP必須</span> <span class="badge badge-optional">FINVIZ任意</span> |
 | [VCP Screener]({{ '/ja/skills/vcp-screener/' | relative_url }}) ★ | Screen S&P 500 stocks for Mark Minervini's Volatility Contraction Pattern (VCP) | <span class="badge badge-free">API不要</span> |
-| [Technical Analyst]({{ '/ja/skills/technical-analyst/' | relative_url }}) | This skill should be used when analyzing weekly price charts for stocks, stock indices, cryptocurrencies, or forex pairs | <span class="badge badge-free">API不要</span> |
-| [Theme Detector]({{ '/ja/skills/theme-detector/' | relative_url }}) ★ | Detect and analyze trending market themes across sectors | <span class="badge badge-free">API不要</span> <span class="badge badge-optional">FMP任意</span> <span class="badge badge-optional">FINVIZ任意</span> |
-| [Trade Hypothesis Ideator]({{ '/ja/skills/trade-hypothesis-ideator/' | relative_url }}) | Generate falsifiable trade strategy hypotheses from market data, trade logs, and journal snippets | <span class="badge badge-free">API不要</span> |
-| [Trader Memory Core]({{ '/ja/skills/trader-memory-core/' | relative_url }}) | Track investment theses across their lifecycle — from screening idea to closed position with postmortem | <span class="badge badge-free">API不要</span> <span class="badge badge-optional">FMP任意</span> |
-| [Uptrend Analyzer]({{ '/ja/skills/uptrend-analyzer/' | relative_url }}) | Analyzes market breadth using Monty's Uptrend Ratio Dashboard data to diagnose the current market environment | <span class="badge badge-free">API不要</span> |
-| [US Market Bubble Detector]({{ '/ja/skills/us-market-bubble-detector/' | relative_url }}) ★ | Evaluates market bubble risk through quantitative data-driven analysis using the revised Minsky/Kindleberger framewor... | <span class="badge badge-free">API不要</span> |
-| [US Stock Analysis]({{ '/ja/skills/us-stock-analysis/' | relative_url }}) ★ | Comprehensive US stock analysis including fundamental analysis (financial metrics, business quality, valuation), tech... | <span class="badge badge-free">API不要</span> |
-| [Value Dividend Screener]({{ '/ja/skills/value-dividend-screener/' | relative_url }}) | Screen US stocks for high-quality dividend opportunities combining value characteristics (P/E ratio under 20, P/B rat... | <span class="badge badge-api">FMP必須</span> <span class="badge badge-optional">FINVIZ任意</span> |
-| [VCP Screener]({{ '/ja/skills/vcp-screener/' | relative_url }}) ★ | Screen S&P 500 stocks for Mark Minervini's Volatility Contraction Pattern (VCP) | <span class="badge badge-free">API不要</span> |
 
 ★ = 使用例・トラブルシューティング・CLIリファレンスを含む詳細ガイド
 
