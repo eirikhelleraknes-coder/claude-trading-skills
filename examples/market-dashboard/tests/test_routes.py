@@ -86,3 +86,10 @@ def test_all_detail_routes_return_200(page):
     client = make_client()
     r = client.get(f"/detail/{page}")
     assert r.status_code == 200, f"/detail/{page} returned {r.status_code}"
+
+
+def test_startup_does_not_crash():
+    """Server starts without exception even with empty cache."""
+    client = make_client()
+    r = client.get("/")
+    assert r.status_code == 200

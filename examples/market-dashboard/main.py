@@ -25,12 +25,24 @@ runner = SkillsRunner(cache_dir=CACHE_DIR, skills_root=SKILLS_ROOT)
 _scheduler = None
 
 
+async def _refresh_stale_on_startup():
+    """On startup, refresh any cache files older than 2× their cadence."""
+    loop = asyncio.get_running_loop()
+    for skill_name in SKILL_REGISTRY:
+        if SKILL_REGISTRY[skill_name].get("script") is None:
+            continue
+        if runner.is_stale(skill_name):
+            loop.run_in_executor(None, runner.run_skill, skill_name)
+            await asyncio.sleep(0.2)  # stagger launches to avoid API bursts
+
+
 @app.on_event("startup")
 async def startup():
     global _scheduler
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     _scheduler = create_scheduler(runner=runner, cache_dir=CACHE_DIR)
     _scheduler.start()
+    asyncio.create_task(_refresh_stale_on_startup())
 
 
 @app.on_event("shutdown")
