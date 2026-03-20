@@ -79,7 +79,17 @@ def test_static_css_served():
     assert r.status_code == 200
 
 import pytest
-from config import DETAIL_ROUTES
+from config import DETAIL_ROUTES, SETTINGS_FILE
+
+
+@pytest.fixture(autouse=True)
+def clean_settings():
+    """Delete settings.json before each test so mode defaults to 'advisory'."""
+    if SETTINGS_FILE.exists():
+        SETTINGS_FILE.unlink()
+    yield
+    if SETTINGS_FILE.exists():
+        SETTINGS_FILE.unlink()
 
 @pytest.mark.parametrize("page", list(DETAIL_ROUTES.keys()))
 def test_all_detail_routes_return_200(page):
@@ -93,3 +103,12 @@ def test_startup_does_not_crash():
     client = make_client()
     r = client.get("/")
     assert r.status_code == 200
+
+
+def test_api_portfolio_returns_html():
+    client = make_client()
+    r = client.get("/api/portfolio")
+    assert r.status_code == 200
+    assert "text/html" in r.headers["content-type"]
+    # Alpaca is not configured in test env → "connect Alpaca" message renders
+    assert b"ALPACA_API_KEY" in r.content

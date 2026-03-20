@@ -15,6 +15,8 @@ from config import CACHE_DIR, DETAIL_ROUTES, ROOT, SKILLS_ROOT, SIGNAL_PANEL_SKI
 from scheduler import create_scheduler
 from settings_manager import SettingsManager
 from skills_runner import SkillsRunner
+from alpaca_client import AlpacaClient
+from config import ALPACA_API_KEY, ALPACA_SECRET_KEY, ALPACA_PAPER
 
 app = FastAPI(title="Market Dashboard")
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
@@ -22,6 +24,11 @@ app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
 settings_manager = SettingsManager()
 runner = SkillsRunner(cache_dir=CACHE_DIR, skills_root=SKILLS_ROOT)
+alpaca = AlpacaClient(
+    api_key=ALPACA_API_KEY,
+    secret_key=ALPACA_SECRET_KEY,
+    paper=ALPACA_PAPER,
+)
 _scheduler = None
 
 
@@ -43,6 +50,8 @@ async def startup():
     _scheduler = create_scheduler(runner=runner, cache_dir=CACHE_DIR)
     _scheduler.start()
     asyncio.create_task(_refresh_stale_on_startup())
+    if alpaca.is_configured:
+        asyncio.create_task(alpaca.start_trading_stream())
 
 
 @app.on_event("shutdown")
@@ -102,6 +111,19 @@ async def api_signals(request: Request):
 @app.get("/api/market-state")
 async def api_market_state():
     return JSONResponse({"state": _market_state()})
+
+
+@app.get("/api/portfolio", response_class=HTMLResponse)
+async def api_portfolio(request: Request):
+    portfolio: dict = {"account": None, "positions": [], "error": None}
+    if alpaca.is_configured:
+        try:
+            portfolio["account"] = alpaca.get_account()
+            portfolio["positions"] = alpaca.get_positions()
+        except Exception as e:
+            portfolio["error"] = str(e)
+    ctx = {"request": request, "portfolio": portfolio, "settings": settings_manager.load()}
+    return templates.TemplateResponse("fragments/portfolio.html", ctx)
 
 
 @app.get("/detail/{page}", response_class=HTMLResponse)

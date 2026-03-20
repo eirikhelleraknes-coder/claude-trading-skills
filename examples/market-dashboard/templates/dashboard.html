@@ -50,9 +50,12 @@
     </div>
   {% else %}
     <!-- Market Hours: portfolio + themes + events -->
-    <div class="bottom-panel" id="portfolio-panel">
+    <div class="bottom-panel" id="portfolio-panel"
+         hx-get="/api/portfolio"
+         hx-trigger="every 5s, load"
+         hx-swap="innerHTML">
       <div class="panel-title">Portfolio (Alpaca)</div>
-      <div style="color:#8b949e; font-size:11px;">Connect Alpaca in Plan 2</div>
+      <div style="color:#8b949e; font-size:11px;">Loading…</div>
     </div>
     <div class="bottom-panel">
       <div class="panel-title">Top Themes</div>
