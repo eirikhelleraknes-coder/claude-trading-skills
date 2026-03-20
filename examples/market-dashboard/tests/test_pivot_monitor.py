@@ -1,9 +1,10 @@
 # tests/test_pivot_monitor.py
-import sys, json, tempfile
+import sys
+import json
+import tempfile
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-import pytest
 from unittest.mock import MagicMock
 from pivot_monitor import PivotWatchlistMonitor
 

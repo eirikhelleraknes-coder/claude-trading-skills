@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
-import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
+from zoneinfo import ZoneInfo
 
 from alpaca_client import AlpacaClient
 from settings_manager import SettingsManager
@@ -67,7 +67,7 @@ class PivotWatchlistMonitor:
                 if symbol and pivot_price:
                     candidates.append({"symbol": symbol, "pivot_price": float(pivot_price)})
             return candidates
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             return []
 
     # ── Stage 1: Pre-market confidence tagging ────────────────────────────
@@ -108,7 +108,6 @@ class PivotWatchlistMonitor:
         if not earnings_file.exists():
             return set()
         try:
-            from zoneinfo import ZoneInfo
             data = json.loads(earnings_file.read_text())
             today = datetime.now(ZoneInfo("America/New_York")).date()
             symbols = set()
@@ -120,7 +119,7 @@ class PivotWatchlistMonitor:
                 except Exception:
                     continue
             return symbols
-        except Exception:
+        except (json.JSONDecodeError, OSError, KeyError):
             return set()
 
     def _get_institutional_accumulation_symbols(self) -> set:
@@ -130,5 +129,5 @@ class PivotWatchlistMonitor:
         try:
             data = json.loads(flow_file.read_text())
             return {s.upper() for s in data.get("accumulation_symbols", [])}
-        except Exception:
+        except (json.JSONDecodeError, OSError):
             return set()
