@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from config import CACHE_DIR, DETAIL_ROUTES, ROOT, SKILLS_ROOT, SIGNAL_PANEL_SKILLS, SKILL_REGISTRY
+from scheduler import create_scheduler
 from settings_manager import SettingsManager
 from skills_runner import SkillsRunner
 
@@ -21,13 +22,21 @@ app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
 settings_manager = SettingsManager()
 runner = SkillsRunner(cache_dir=CACHE_DIR, skills_root=SKILLS_ROOT)
+_scheduler = None
 
 
 @app.on_event("startup")
 async def startup():
+    global _scheduler
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    # Scheduler started here in Task 9
-    # Alpaca client started here in Plan 2
+    _scheduler = create_scheduler(runner=runner, cache_dir=CACHE_DIR)
+    _scheduler.start()
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    if _scheduler and _scheduler.running:
+        _scheduler.shutdown()
 
 
 def _market_state() -> str:
