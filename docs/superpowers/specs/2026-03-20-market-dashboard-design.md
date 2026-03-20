@@ -97,7 +97,9 @@ examples/market-dashboard/
 ### Top bar
 - App name + status indicator — three states: `Pre-Market` (7:00–9:30 AM ET) / `Market Open` (9:30 AM–4:00 PM ET) / `Market Closed`
 - Live index prices (SPY, QQQ, VIX) — updated via TradingView ticker tape
+- **Environment badge** — `📄 PAPER` (green) or `💰 LIVE` (amber) — always visible, cannot be hidden
 - **Trading mode badge** (e.g. "✅ Semi-Auto") — click to open settings modal
+- When in `LIVE` + `Auto` mode: red border around the entire dashboard as a persistent visual warning
 
 ### Ticker tape
 - TradingView Ticker Tape widget — free, live, no API key required
@@ -153,6 +155,33 @@ Accessible via the mode badge in the header — opens a settings modal on click.
 - Max open positions
 - Max position size (% of account)
 - Warning confirmation required when switching to Level 3
+- **Environment selector: Paper / Live** (see below)
+
+### Paper vs. Live Environment
+
+Controlled from the settings modal. Switching environments requires explicit confirmation.
+
+| Setting | Paper Trading | Live Trading |
+|---|---|---|
+| `ALPACA_BASE_URL` | `https://paper-api.alpaca.markets` | `https://api.alpaca.markets` |
+| `ALPACA_PAPER` | `true` | `false` |
+| API keys | Paper account keys | Live account keys |
+| Starting balance | $100,000 simulated | Real funded balance |
+| Order fills | Simulated at market price | Real exchange fills |
+| Commission | None (simulated) | None (Alpaca is commission-free) |
+
+**Switching guard:** Switching from Paper → Live requires typing `CONFIRM LIVE TRADING` in a confirmation dialog. Switching from Live → Paper requires no confirmation. The environment cannot be changed while Level 3 Auto is active — Auto must be disabled first.
+
+**Recommended progression:**
+
+| Phase | Mode | Environment | Purpose |
+|---|---|---|---|
+| 1 | Level 1 Advisory | Paper | Verify signals and dashboard accuracy |
+| 2 | Level 2 Semi-Auto | Paper | Verify order preview, bracket orders, stop placement |
+| 3 | Level 3 Auto | Paper | Verify pivot triggers, learning system, guard rails |
+| 4 | Level 2 Semi-Auto | Live (small size) | Verify real fills and slippage |
+| 5 | Level 3 Auto | Live (small size) | Verify bot behaviour matches paper |
+| 6 | Level 3 Auto | Live (full size) | Only after consistent paper results |
 
 ### Level 3 Auto — Trade Trigger Logic
 
