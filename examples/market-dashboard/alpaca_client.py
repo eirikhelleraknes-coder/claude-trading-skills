@@ -130,6 +130,8 @@ class AlpacaClient:
 
         @stream.subscribe_trade_updates
         async def handle_update(data):
+            # _last_fill written from TradingStream's thread. Plain dict assignment
+            # is atomic under CPython's GIL. A future /api/fills route reads this field.
             self._last_fill = {
                 "symbol": data.order.symbol,
                 "side": str(data.order.side),

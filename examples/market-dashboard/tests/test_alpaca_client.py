@@ -98,3 +98,20 @@ def test_is_configured_true_when_keys_present():
     from alpaca_client import AlpacaClient
     client = AlpacaClient(api_key="key", secret_key="secret")
     assert client.is_configured
+
+
+def test_start_trading_stream_calls_stream_run():
+    """start_trading_stream connects the TradingStream and runs it."""
+    import asyncio
+    from unittest.mock import MagicMock, patch
+    from alpaca_client import AlpacaClient
+
+    mock_stream = MagicMock()
+    mock_stream.run = MagicMock()
+    mock_stream.subscribe_trade_updates = lambda fn: fn  # decorator no-op
+
+    with patch("alpaca.trading.stream.TradingStream", return_value=mock_stream):
+        client = AlpacaClient(api_key="k", secret_key="s")
+        asyncio.run(client.start_trading_stream())
+
+    mock_stream.run.assert_called_once()
