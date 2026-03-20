@@ -27,8 +27,10 @@ Browser (HTMX)
 
 FastAPI (main.py)
     ├── APScheduler ─────────────────────────► runs skill scripts on cadence → cache/*.json
-    └── AlpacaClient ────────────────────────► REST polling (GET /account, GET /positions) → in-memory portfolio state
-                                               Trading stream WebSocket → order fill notifications
+    ├── AlpacaClient ────────────────────────► REST polling (GET /account, GET /positions) → in-memory portfolio state
+    │                                          Trading stream WebSocket → order fill notifications
+    └── PivotWatchlistMonitor ───────────────► Alpaca data WebSocket → subscribes to VCP candidate symbols
+                                               fires order when price crosses pivot (Auto mode only)
 ```
 
 **Key principles:**
@@ -49,6 +51,7 @@ examples/market-dashboard/
 ├── scheduler.py             # APScheduler — skill cadence background jobs
 ├── skills_runner.py         # Subprocess runner + JSON cache writer
 ├── alpaca_client.py         # Two Alpaca clients: TradingClient (portfolio REST + trading stream WebSocket + order placement) and StockHistoricalDataClient (last-trade price lookup at order execution time)
+├── pivot_monitor.py         # PivotWatchlistMonitor: loads VCP candidates at open, subscribes to Alpaca data WebSocket, fires bracket order when price crosses pivot (Auto mode only)
 ├── config.py                # .env loading, constants, skill schedule config
 │
 ├── templates/
@@ -142,6 +145,27 @@ Accessible via the mode badge in the header — opens a settings modal on click.
 - Max open positions
 - Max position size (% of account)
 - Warning confirmation required when switching to Level 3
+
+### Level 3 Auto — Trade Trigger Logic
+
+Trades in Auto mode are triggered by **price breakout above the VCP pivot**, not at signal detection time. This is the correct way to trade VCP patterns.
+
+**Flow:**
+1. VCP Screener runs once at 9:30 AM open → produces candidates with pivot prices
+2. `PivotWatchlistMonitor` loads candidates from `cache/vcp-screener.json`
+3. Monitor subscribes to the candidate symbols via **Alpaca data WebSocket** (free, real-time)
+4. When a symbol's price crosses `pivot × 1.001` (0.1% buffer to avoid false triggers), the monitor fires automatically:
+   - Fetches last-trade price via `StockHistoricalDataClient`
+   - Calculates position size using default risk % and stop from VCP output
+   - Places bracket order via `TradingClient` (entry limit + stop-loss, atomically)
+5. Order fill notification arrives via Alpaca trading stream → dashboard updates portfolio panel
+6. Monitor unsubscribes from that symbol after order is placed
+
+**Guard rails in Auto mode:**
+- Max positions check before firing (won't exceed `MAX_POSITIONS` from settings)
+- Max position size check (won't exceed `MAX_POSITION_SIZE_PCT` of account)
+- Only fires during market hours (9:30 AM–4:00 PM ET) — monitor is inactive pre-market and after close
+- If market is in a "Caution" or worse state per Market Top Detector, Auto mode pauses new entries and alerts the user
 
 ### Settings persistence
 Mode and risk settings are written to `settings.json` in the project directory (not `.env`). The app reads `settings.json` on startup; if it does not exist, defaults are used and the file is created. `.env` holds secrets and initial defaults only and is never modified at runtime.
