@@ -84,7 +84,12 @@ def _make_pre_market_job(runner, skill_name: str):
     return job
 
 
-def create_scheduler(runner, cache_dir: Path) -> AsyncIOScheduler:
+def create_scheduler(
+    runner,
+    cache_dir: Path,
+    pivot_monitor=None,
+    pattern_extractor=None,
+) -> AsyncIOScheduler:
     """Build and return a configured AsyncIOScheduler (not yet started).
 
     Note: sector-analyst has no independent scheduled job. It runs only as a
@@ -155,5 +160,43 @@ def create_scheduler(runner, cache_dir: Path) -> AsyncIOScheduler:
                     id=skill_name,
                     replace_existing=True,
                 )
+
+    # ── Plan 3: Pivot monitor jobs ────────────────────────────────────────
+    if pivot_monitor is not None:
+        def stage1_job():
+            candidates = pivot_monitor.load_candidates()
+            pivot_monitor._candidates = pivot_monitor.run_stage1_check(candidates)
+
+        sched.add_job(
+            stage1_job,
+            CronTrigger(day_of_week="mon-fri", hour=7, minute=0),
+            id="pivot_stage1",
+            replace_existing=True,
+        )
+
+        async def monitor_start_job():
+            settings = pivot_monitor._settings.load()
+            if settings.get("mode") != "auto":
+                return
+            if not pivot_monitor._candidates:
+                pivot_monitor._candidates = pivot_monitor.run_stage1_check(
+                    pivot_monitor.load_candidates()
+                )
+            asyncio.create_task(pivot_monitor.start(pivot_monitor._candidates))
+
+        sched.add_job(
+            monitor_start_job,
+            CronTrigger(day_of_week="mon-fri", hour=9, minute=32),
+            id="pivot_monitor_start",
+            replace_existing=True,
+        )
+
+    if pattern_extractor is not None:
+        sched.add_job(
+            pattern_extractor.extract,
+            CronTrigger(day_of_week="sat", hour=18, minute=0),
+            id="pattern_extraction",
+            replace_existing=True,
+        )
 
     return sched

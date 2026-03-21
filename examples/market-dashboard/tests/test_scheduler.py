@@ -75,3 +75,31 @@ def test_exposure_coach_job_runs_sector_analyst_first(tmp_path):
     calls = [c[0][0] for c in mock_runner.run_skill.call_args_list]
     assert calls[0] == "sector-analyst", f"First call must be sector-analyst, got {calls}"
     assert "exposure-coach" in calls
+
+
+def test_scheduler_registers_stage1_job_when_pivot_monitor_given():
+    from scheduler import create_scheduler
+    from unittest.mock import MagicMock
+    monitor = MagicMock()
+    monitor.load_candidates.return_value = []
+    sched = create_scheduler(runner=None, cache_dir=Path("/tmp"), pivot_monitor=monitor)
+    job_ids = [j.id for j in sched.get_jobs()]
+    assert "pivot_stage1" in job_ids
+
+
+def test_scheduler_registers_monitor_start_job_when_pivot_monitor_given():
+    from scheduler import create_scheduler
+    from unittest.mock import MagicMock
+    monitor = MagicMock()
+    sched = create_scheduler(runner=None, cache_dir=Path("/tmp"), pivot_monitor=monitor)
+    job_ids = [j.id for j in sched.get_jobs()]
+    assert "pivot_monitor_start" in job_ids
+
+
+def test_scheduler_registers_pattern_extraction_when_extractor_given():
+    from scheduler import create_scheduler
+    from unittest.mock import MagicMock
+    extractor = MagicMock()
+    sched = create_scheduler(runner=None, cache_dir=Path("/tmp"), pattern_extractor=extractor)
+    job_ids = [j.id for j in sched.get_jobs()]
+    assert "pattern_extraction" in job_ids

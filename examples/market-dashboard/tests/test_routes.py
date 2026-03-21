@@ -176,3 +176,13 @@ def test_post_settings_paper_needs_no_confirm():
         "environment": "paper",
     })
     assert r.status_code == 200
+
+
+def test_monitor_status_returns_json():
+    client = make_client()
+    r = client.get("/api/monitor/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert "active" in data
+    assert "candidate_count" in data
+    assert "triggered" in data

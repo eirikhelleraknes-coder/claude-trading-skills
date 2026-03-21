@@ -17,6 +17,9 @@ from scheduler import create_scheduler
 from settings_manager import SettingsManager
 from skills_runner import SkillsRunner
 from alpaca_client import AlpacaClient
+from learning.rule_store import RuleStore
+from learning.pattern_extractor import PatternExtractor
+from pivot_monitor import PivotWatchlistMonitor
 
 app = FastAPI(title="Market Dashboard")
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
@@ -28,6 +31,18 @@ alpaca = AlpacaClient(
     api_key=ALPACA_API_KEY,
     secret_key=ALPACA_SECRET_KEY,
     paper=ALPACA_PAPER,
+)
+rule_store = RuleStore()  # defaults to learning/learned_rules.json
+pivot_monitor = PivotWatchlistMonitor(
+    alpaca_client=alpaca,
+    settings_manager=settings_manager,
+    cache_dir=CACHE_DIR,
+    rule_store=rule_store,
+)
+pattern_extractor = PatternExtractor(
+    alpaca_client=alpaca,
+    rule_store=rule_store,
+    cache_dir=CACHE_DIR,
 )
 _scheduler = None
 
@@ -47,7 +62,12 @@ async def _refresh_stale_on_startup():
 async def startup():
     global _scheduler
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    _scheduler = create_scheduler(runner=runner, cache_dir=CACHE_DIR)
+    _scheduler = create_scheduler(
+        runner=runner,
+        cache_dir=CACHE_DIR,
+        pivot_monitor=pivot_monitor,
+        pattern_extractor=pattern_extractor,
+    )
     _scheduler.start()
     asyncio.create_task(_refresh_stale_on_startup())
     if alpaca.is_configured:
@@ -195,6 +215,16 @@ async def api_portfolio(request: Request):
             portfolio["error"] = str(e)
     ctx = {"request": request, "portfolio": portfolio, "settings": settings_manager.load()}
     return templates.TemplateResponse("fragments/portfolio.html", ctx)
+
+
+@app.get("/api/monitor/status")
+async def monitor_status():
+    """Return current PivotWatchlistMonitor state for the Auto mode banner."""
+    return JSONResponse({
+        "active": len(pivot_monitor._candidates) > 0,
+        "candidate_count": len(pivot_monitor._candidates),
+        "triggered": list(pivot_monitor._triggered),
+    })
 
 
 @app.get("/detail/{page}", response_class=HTMLResponse)
