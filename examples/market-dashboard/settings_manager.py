@@ -20,6 +20,9 @@ _DEFAULTS = {
     "max_positions": DEFAULT_MAX_POSITIONS,
     "max_position_size_pct": DEFAULT_MAX_POSITION_SIZE_PCT,
     "environment": "paper",
+    "max_weekly_drawdown_pct": 10.0,
+    "max_daily_loss_pct": 5.0,
+    "earnings_blackout_days": 5,
 }
 
 

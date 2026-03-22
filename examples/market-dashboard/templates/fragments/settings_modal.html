@@ -50,6 +50,23 @@
                value="{{ settings.max_position_size_pct }}" min="1" max="50" step="0.5">
       </div>
 
+      <!-- Capital Protection -->
+      <div class="form-row">
+        <div class="form-label">Max Weekly Drawdown % (100 = off)</div>
+        <input type="number" name="max_weekly_drawdown_pct" class="form-input"
+               value="{{ settings.max_weekly_drawdown_pct }}" min="1" max="100" step="0.5">
+      </div>
+      <div class="form-row">
+        <div class="form-label">Max Daily Loss % (100 = off)</div>
+        <input type="number" name="max_daily_loss_pct" class="form-input"
+               value="{{ settings.max_daily_loss_pct }}" min="1" max="100" step="0.5">
+      </div>
+      <div class="form-row">
+        <div class="form-label">Earnings Blackout Days (0 = off)</div>
+        <input type="number" name="earnings_blackout_days" class="form-input"
+               value="{{ settings.earnings_blackout_days }}" min="0" max="30">
+      </div>
+
       <div style="display:flex; gap:8px; margin-top:16px;">
         <button type="submit" class="btn-primary">Save</button>
         <button type="button" class="btn-secondary" onclick="document.getElementById('modal-container').innerHTML=''">Cancel</button>

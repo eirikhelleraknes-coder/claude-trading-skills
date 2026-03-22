@@ -302,3 +302,43 @@ def test_order_preview_includes_multiplier_in_response(monkeypatch):
     })
     assert r.status_code == 200
     assert "×" in r.text or "x R" in r.text.lower()
+
+
+def test_new_settings_fields_save_and_load_round_trip():
+    """New capital-protection fields must persist through POST and appear in GET."""
+    client = make_client()
+    r = client.post("/api/settings", data={
+        "mode": "advisory",
+        "default_risk_pct": "1.0",
+        "max_positions": "5",
+        "max_position_size_pct": "10.0",
+        "environment": "paper",
+        "max_weekly_drawdown_pct": "8.0",
+        "max_daily_loss_pct": "3.5",
+        "earnings_blackout_days": "7",
+    })
+    assert r.status_code == 200
+    from settings_manager import SettingsManager
+    s = SettingsManager().load()
+    assert s["max_weekly_drawdown_pct"] == 8.0
+    assert s["max_daily_loss_pct"] == 3.5
+    assert s["earnings_blackout_days"] == 7
+
+
+def test_new_settings_fields_have_defaults_when_not_set():
+    """When settings.json is absent, new fields must return their defaults."""
+    from settings_manager import SettingsManager
+    s = SettingsManager().load()
+    assert s["max_weekly_drawdown_pct"] == 10.0
+    assert s["max_daily_loss_pct"] == 5.0
+    assert s["earnings_blackout_days"] == 5
+
+
+def test_settings_form_includes_new_fields():
+    """GET /api/settings HTML must contain the three new input field names."""
+    client = make_client()
+    r = client.get("/api/settings")
+    assert r.status_code == 200
+    assert b"max_weekly_drawdown_pct" in r.content
+    assert b"max_daily_loss_pct" in r.content
+    assert b"earnings_blackout_days" in r.content

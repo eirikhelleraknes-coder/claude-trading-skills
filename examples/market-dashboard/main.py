@@ -21,6 +21,9 @@ from alpaca_client import AlpacaClient
 from learning.rule_store import RuleStore
 from learning.pattern_extractor import PatternExtractor
 from learning.multiplier_store import MultiplierStore
+from learning.pdt_tracker import PDTTracker
+from learning.drawdown_tracker import DrawdownTracker
+from learning.earnings_blackout import EarningsBlackout
 from pivot_monitor import PivotWatchlistMonitor
 
 app = FastAPI(title="Market Dashboard")
@@ -36,12 +39,18 @@ alpaca = AlpacaClient(
 )
 rule_store = RuleStore()  # defaults to learning/learned_rules.json
 multiplier_store = MultiplierStore()  # uses learning/seed_multipliers.json + learning/learned_multipliers.json
+pdt_tracker = PDTTracker()
+drawdown_tracker = DrawdownTracker()
+earnings_blackout = EarningsBlackout(cache_dir=CACHE_DIR)
 pivot_monitor = PivotWatchlistMonitor(
     alpaca_client=alpaca,
     settings_manager=settings_manager,
     cache_dir=CACHE_DIR,
     rule_store=rule_store,
     multiplier_store=multiplier_store,
+    pdt_tracker=pdt_tracker,
+    drawdown_tracker=drawdown_tracker,
+    earnings_blackout=earnings_blackout,
 )
 pattern_extractor = PatternExtractor(
     alpaca_client=alpaca,
@@ -330,6 +339,9 @@ async def post_settings(
     max_position_size_pct: float = Form(...),
     environment: str = Form(...),
     live_confirm: str = Form(""),
+    max_weekly_drawdown_pct: float = Form(10.0),
+    max_daily_loss_pct: float = Form(5.0),
+    earnings_blackout_days: int = Form(5),
 ):
     if environment == "live" and live_confirm != "CONFIRM LIVE TRADING":
         raise HTTPException(
@@ -342,6 +354,9 @@ async def post_settings(
         "max_positions": max_positions,
         "max_position_size_pct": max_position_size_pct,
         "environment": environment,
+        "max_weekly_drawdown_pct": max_weekly_drawdown_pct,
+        "max_daily_loss_pct": max_daily_loss_pct,
+        "earnings_blackout_days": earnings_blackout_days,
     })
     ctx = {"request": request, "settings": settings_manager.load()}
     return templates.TemplateResponse("fragments/settings_modal.html", ctx)
