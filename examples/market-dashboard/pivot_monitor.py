@@ -43,6 +43,9 @@ class PivotWatchlistMonitor:
         cache_dir: Path,
         rule_store=None,
         multiplier_store=None,
+        pdt_tracker=None,
+        drawdown_tracker=None,
+        earnings_blackout=None,
         _search_fn: Optional[Callable[[str], list[str]]] = None,
         _data_stream=None,
     ):
@@ -51,6 +54,9 @@ class PivotWatchlistMonitor:
         self._cache_dir = cache_dir
         self._rule_store = rule_store
         self._multiplier_store = multiplier_store
+        self._pdt_tracker = pdt_tracker
+        self._drawdown_tracker = drawdown_tracker
+        self._earnings_blackout = earnings_blackout
         self._search_fn = _search_fn or _default_search_fn
         self._data_stream = _data_stream
         self._candidates: list[dict] = []
@@ -157,7 +163,7 @@ class PivotWatchlistMonitor:
                 continue
 
             # Breakout detected — run guard rails
-            allowed, reason = self._guard_rails_allow(c)
+            allowed, reason = self._guard_rails_allow(c, tag=tag)
             if not allowed:
                 print(f"[pivot_monitor] {c['symbol']} guard: {reason}", file=sys.stderr)
                 continue
@@ -174,7 +180,7 @@ class PivotWatchlistMonitor:
                 self._triggered.add(c["symbol"])
             self._fire_order(c, tag)
 
-    def _guard_rails_allow(self, candidate: dict) -> tuple[bool, str]:
+    def _guard_rails_allow(self, candidate: dict, tag: str = "CLEAR") -> tuple[bool, str]:
         """Check all guard rails. Returns (allowed, reason)."""
         if not _market_is_open_now():
             return False, "outside market hours"
@@ -199,6 +205,41 @@ class PivotWatchlistMonitor:
                 return False, f"max_positions={max_pos} reached"
         except Exception:  # fail closed — any Alpaca error blocks the order
             return False, "could not check positions"
+
+        # PDT selectivity
+        if self._pdt_tracker is not None:
+            from datetime import date as _date
+            allowed_tags = self._pdt_tracker.get_allowed_tags(_date.today())
+            if not allowed_tags:
+                return False, "PDT: 3 day trades used — no new entries"
+            if tag not in allowed_tags:
+                return False, f"PDT: {len(allowed_tags)} slot(s) left — {tag} not allowed"
+
+        # Drawdown circuit breaker
+        if self._drawdown_tracker is not None:
+            settings = self._settings.load()
+            try:
+                acct = self._alpaca.get_account()
+                portfolio_value = float(acct["portfolio_value"])
+                max_weekly = settings.get("max_weekly_drawdown_pct", 10.0)
+                max_daily = settings.get("max_daily_loss_pct", 5.0)
+                from datetime import date as _date
+                self._drawdown_tracker.update(portfolio_value, _date.today())
+                if self._drawdown_tracker.is_weekly_limit_breached(portfolio_value, max_weekly):
+                    return False, f"drawdown: weekly limit {max_weekly}% breached"
+                if self._drawdown_tracker.is_daily_limit_breached(portfolio_value, max_daily):
+                    return False, f"drawdown: daily limit {max_daily}% breached"
+            except Exception as e:
+                print(f"[pivot_monitor] drawdown check error: {e}", file=sys.stderr)
+
+        # Earnings blackout
+        if self._earnings_blackout is not None:
+            settings = self._settings.load()
+            blackout_days = settings.get("earnings_blackout_days", 5)
+            symbol = candidate.get("symbol", "")
+            from datetime import date as _date
+            if self._earnings_blackout.is_blacked_out(symbol, _date.today(), blackout_days):
+                return False, f"earnings blackout: {symbol} reports within {blackout_days} days"
 
         return True, ""
 

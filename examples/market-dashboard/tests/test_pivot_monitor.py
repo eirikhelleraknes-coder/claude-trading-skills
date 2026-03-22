@@ -341,3 +341,161 @@ def test_log_trade_stores_regime_as_string():
         assert trades[0]["regime"] == "bull"
         assert isinstance(trades[0]["regime"], str)
         assert "macro_regime" not in trades[0]
+
+
+# ── Task 4: Capital protection guard rail tests ──────────────────────────
+
+
+def make_monitor_with_trackers(tmp_path, pdt_tracker=None, drawdown_tracker=None, earnings_blackout=None):
+    alpaca = MagicMock()
+    alpaca.is_configured = True
+    alpaca.get_positions.return_value = []
+    alpaca.get_account.return_value = {"portfolio_value": 100_000.0}
+    settings = MagicMock()
+    settings.load.return_value = {
+        "mode": "auto",
+        "default_risk_pct": 1.0,
+        "max_positions": 5,
+        "max_position_size_pct": 10.0,
+        "max_weekly_drawdown_pct": 10.0,
+        "max_daily_loss_pct": 5.0,
+        "earnings_blackout_days": 5,
+    }
+    return PivotWatchlistMonitor(
+        alpaca_client=alpaca,
+        settings_manager=settings,
+        cache_dir=Path(tmp_path),
+        pdt_tracker=pdt_tracker,
+        drawdown_tracker=drawdown_tracker,
+        earnings_blackout=earnings_blackout,
+    )
+
+
+def test_pdt_0_slots_blocks_all_tags():
+    with tempfile.TemporaryDirectory() as d:
+        from learning.pdt_tracker import PDTTracker
+        from datetime import date
+        tracker = PDTTracker(trades_file=Path(d) / "pdt.json")
+        today = date.today()
+        for sym in ("A", "B", "C"):
+            tracker.record_day_trade(sym, today)
+        monitor = make_monitor_with_trackers(Path(d), pdt_tracker=tracker)
+        import pivot_monitor as pm
+        pm._market_is_open_now = lambda: True
+        allowed, reason = monitor._guard_rails_allow({"symbol": "AAPL"}, tag="HIGH_CONVICTION")
+        assert allowed is False
+        assert "PDT" in reason
+
+
+def test_pdt_1_slot_blocks_clear_allows_high_conviction():
+    with tempfile.TemporaryDirectory() as d:
+        from learning.pdt_tracker import PDTTracker
+        from datetime import date
+        tracker = PDTTracker(trades_file=Path(d) / "pdt.json")
+        today = date.today()
+        for sym in ("A", "B"):
+            tracker.record_day_trade(sym, today)
+        monitor = make_monitor_with_trackers(Path(d), pdt_tracker=tracker)
+        import pivot_monitor as pm
+        pm._market_is_open_now = lambda: True
+        allowed_clear, _ = monitor._guard_rails_allow({"symbol": "AAPL"}, tag="CLEAR")
+        allowed_hc, _ = monitor._guard_rails_allow({"symbol": "AAPL"}, tag="HIGH_CONVICTION")
+        assert allowed_clear is False
+        assert allowed_hc is True
+
+
+def test_pdt_2_slots_blocks_uncertain():
+    with tempfile.TemporaryDirectory() as d:
+        from learning.pdt_tracker import PDTTracker
+        from datetime import date
+        tracker = PDTTracker(trades_file=Path(d) / "pdt.json")
+        today = date.today()
+        tracker.record_day_trade("A", today)
+        monitor = make_monitor_with_trackers(Path(d), pdt_tracker=tracker)
+        import pivot_monitor as pm
+        pm._market_is_open_now = lambda: True
+        allowed_uncertain, _ = monitor._guard_rails_allow({"symbol": "AAPL"}, tag="UNCERTAIN")
+        allowed_clear, _ = monitor._guard_rails_allow({"symbol": "AAPL"}, tag="CLEAR")
+        assert allowed_uncertain is False
+        assert allowed_clear is True
+
+
+def test_drawdown_weekly_limit_blocks_guard():
+    with tempfile.TemporaryDirectory() as d:
+        from learning.drawdown_tracker import DrawdownTracker
+        from datetime import date
+        tracker = DrawdownTracker(state_file=Path(d) / "dd.json")
+        monday = date(2026, 3, 16)
+        tracker.update(10000.0, monday)
+        alpaca = MagicMock()
+        alpaca.is_configured = True
+        alpaca.get_positions.return_value = []
+        alpaca.get_account.return_value = {"portfolio_value": 8900.0}
+        settings = MagicMock()
+        settings.load.return_value = {
+            "mode": "auto", "default_risk_pct": 1.0,
+            "max_positions": 5, "max_position_size_pct": 10.0,
+            "max_weekly_drawdown_pct": 10.0, "max_daily_loss_pct": 5.0,
+            "earnings_blackout_days": 5,
+        }
+        monitor = PivotWatchlistMonitor(
+            alpaca_client=alpaca,
+            settings_manager=settings,
+            cache_dir=Path(d),
+            drawdown_tracker=tracker,
+        )
+        import pivot_monitor as pm
+        pm._market_is_open_now = lambda: True
+        allowed, reason = monitor._guard_rails_allow({"symbol": "AAPL"}, tag="CLEAR")
+        assert allowed is False
+        assert "drawdown" in reason.lower()
+
+
+def test_drawdown_disabled_at_100_pct_always_allows():
+    with tempfile.TemporaryDirectory() as d:
+        from learning.drawdown_tracker import DrawdownTracker
+        from datetime import date
+        tracker = DrawdownTracker(state_file=Path(d) / "dd.json")
+        monday = date(2026, 3, 16)
+        tracker.update(10000.0, monday)
+        alpaca = MagicMock()
+        alpaca.is_configured = True
+        alpaca.get_positions.return_value = []
+        alpaca.get_account.return_value = {"portfolio_value": 1.0}
+        settings = MagicMock()
+        settings.load.return_value = {
+            "mode": "auto", "default_risk_pct": 1.0,
+            "max_positions": 5, "max_position_size_pct": 10.0,
+            "max_weekly_drawdown_pct": 100.0, "max_daily_loss_pct": 100.0,
+            "earnings_blackout_days": 0,
+        }
+        monitor = PivotWatchlistMonitor(
+            alpaca_client=alpaca,
+            settings_manager=settings,
+            cache_dir=Path(d),
+            drawdown_tracker=tracker,
+        )
+        import pivot_monitor as pm
+        pm._market_is_open_now = lambda: True
+        allowed, _ = monitor._guard_rails_allow({"symbol": "AAPL"}, tag="CLEAR")
+        assert allowed is True
+
+
+def test_earnings_blackout_blocks_when_reporting_soon():
+    with tempfile.TemporaryDirectory() as d:
+        from learning.earnings_blackout import EarningsBlackout
+        from datetime import date, timedelta
+        import json as _json
+        cache = Path(d)
+        today = date.today()
+        earnings_in_3_days = (today + timedelta(days=3)).isoformat() + "T07:00:00"
+        (cache / "earnings-calendar.json").write_text(
+            _json.dumps({"events": [{"symbol": "AAPL", "date": earnings_in_3_days}]})
+        )
+        eb = EarningsBlackout(cache_dir=cache)
+        monitor = make_monitor_with_trackers(Path(d), earnings_blackout=eb)
+        import pivot_monitor as pm
+        pm._market_is_open_now = lambda: True
+        allowed, reason = monitor._guard_rails_allow({"symbol": "AAPL"}, tag="CLEAR")
+        assert allowed is False
+        assert "earnings" in reason.lower()
