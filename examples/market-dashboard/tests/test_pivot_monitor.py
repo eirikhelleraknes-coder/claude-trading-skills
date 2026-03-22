@@ -717,3 +717,96 @@ def test_breadth_reduction_zero_disables_filter(tmp_path):
     monitor._settings.load.return_value["breadth_size_reduction_pct"] = 0.0
     result = monitor._get_breadth_multiplier()
     assert result == 1.0
+
+
+# ── Task 2: Exit management orchestrator tests ────────────────────────────────
+
+import os
+
+
+def write_auto_trades(tmp_path, trades):
+    (tmp_path / "auto_trades.json").write_text(json.dumps({"trades": trades}, indent=2))
+
+
+def test_check_exit_management_skips_when_no_trades_file():
+    with tempfile.TemporaryDirectory() as d:
+        monitor = make_monitor(Path(d))
+        import pivot_monitor as pm
+        original = pm._market_is_open_now
+        pm._market_is_open_now = lambda: True
+        try:
+            monitor._check_exit_management()
+        finally:
+            pm._market_is_open_now = original
+
+
+def test_check_exit_management_skips_outside_market_hours():
+    with tempfile.TemporaryDirectory() as d:
+        monitor = make_monitor(Path(d))
+        write_auto_trades(Path(d), [{"symbol": "AAPL", "entry_price": 100.0, "stop_price": 97.0, "qty": 10, "outcome": None, "stop_order_id": "ord1", "entry_time": "2026-03-20T14:00:00+00:00"}])
+        import pivot_monitor as pm
+        pm._market_is_open_now = lambda: False
+        called = []
+        monitor._apply_trailing_stop = lambda t, s: called.append("trailing") or False
+        monitor._apply_partial_exit = lambda t, s: called.append("partial") or False
+        monitor._apply_time_stop = lambda t, s: called.append("time") or False
+        monitor._check_exit_management()
+        assert called == []
+
+
+def test_check_exit_management_skips_closed_trades():
+    with tempfile.TemporaryDirectory() as d:
+        monitor = make_monitor(Path(d))
+        write_auto_trades(Path(d), [{"symbol": "AAPL", "entry_price": 100.0, "stop_price": 97.0, "qty": 10, "outcome": "win", "stop_order_id": "ord1", "entry_time": "2026-03-15T14:00:00+00:00"}])
+        import pivot_monitor as pm
+        original = pm._market_is_open_now
+        pm._market_is_open_now = lambda: True
+        called = []
+        monitor._apply_trailing_stop = lambda t, s: called.append("trailing") or False
+        try:
+            monitor._check_exit_management()
+        finally:
+            pm._market_is_open_now = original
+        assert called == []
+
+
+def test_check_exit_management_writes_file_when_changed():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        monitor = make_monitor(tmp)
+        write_auto_trades(tmp, [{"symbol": "AAPL", "entry_price": 100.0, "stop_price": 97.0, "qty": 10, "outcome": None, "stop_order_id": "ord1", "entry_time": "2026-03-20T14:00:00+00:00"}])
+        import pivot_monitor as pm
+        original = pm._market_is_open_now
+        pm._market_is_open_now = lambda: True
+        def fake_trailing(trade, settings):
+            trade["stop_price"] = 100.0
+            return True
+        monitor._apply_trailing_stop = fake_trailing
+        monitor._apply_partial_exit = lambda t, s: False
+        monitor._apply_time_stop = lambda t, s: False
+        try:
+            monitor._check_exit_management()
+        finally:
+            pm._market_is_open_now = original
+        result = json.loads((tmp / "auto_trades.json").read_text())
+        assert result["trades"][0]["stop_price"] == 100.0
+
+
+def test_check_exit_management_does_not_write_file_when_unchanged():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        monitor = make_monitor(tmp)
+        write_auto_trades(tmp, [{"symbol": "AAPL", "entry_price": 100.0, "stop_price": 97.0, "qty": 10, "outcome": None, "stop_order_id": "ord1", "entry_time": "2026-03-20T14:00:00+00:00"}])
+        mtime_before = os.path.getmtime(str(tmp / "auto_trades.json"))
+        import pivot_monitor as pm
+        original = pm._market_is_open_now
+        pm._market_is_open_now = lambda: True
+        monitor._apply_trailing_stop = lambda t, s: False
+        monitor._apply_partial_exit = lambda t, s: False
+        monitor._apply_time_stop = lambda t, s: False
+        try:
+            monitor._check_exit_management()
+        finally:
+            pm._market_is_open_now = original
+        mtime_after = os.path.getmtime(str(tmp / "auto_trades.json"))
+        assert mtime_before == mtime_after

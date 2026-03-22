@@ -397,6 +397,41 @@ class PivotWatchlistMonitor:
         except Exception:
             return None
 
+    def _check_exit_management(self) -> None:
+        from pivot_monitor import _market_is_open_now
+        if not _market_is_open_now():
+            return
+        settings = self._settings.load()
+        trades_file = self._cache_dir / "auto_trades.json"
+        if not trades_file.exists():
+            return
+        try:
+            data = json.loads(trades_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            return
+        open_trades = [t for t in data.get("trades", []) if t.get("outcome") is None]
+        if not open_trades:
+            return
+        changed = False
+        for trade in open_trades:
+            try:
+                changed |= self._apply_trailing_stop(trade, settings)
+                changed |= self._apply_partial_exit(trade, settings)
+                changed |= self._apply_time_stop(trade, settings)
+            except Exception as e:
+                print(f"[exit_mgmt] {trade.get('symbol')} error: {e}", file=sys.stderr)
+        if changed:
+            trades_file.write_text(json.dumps(data, indent=2))
+
+    def _apply_trailing_stop(self, trade: dict, settings: dict) -> bool:
+        return False  # stub
+
+    def _apply_partial_exit(self, trade: dict, settings: dict) -> bool:
+        return False  # stub
+
+    def _apply_time_stop(self, trade: dict, settings: dict) -> bool:
+        return False  # stub
+
     def _get_breadth_multiplier(self) -> float:
         """Returns size multiplier based on market breadth. 1.0 = full size."""
         settings = self._settings.load()
