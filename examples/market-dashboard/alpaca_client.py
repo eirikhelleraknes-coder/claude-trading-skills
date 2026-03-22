@@ -80,6 +80,22 @@ class AlpacaClient:
         trade = self.data_client.get_stock_latest_trade(request)
         return float(trade[symbol].price)
 
+    def get_current_volume(self, symbol: str) -> int:
+        """Return today's accumulated volume for symbol using the latest daily bar."""
+        from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.timeframe import TimeFrame
+        from datetime import date
+        request = StockBarsRequest(
+            symbol_or_symbols=symbol,
+            timeframe=TimeFrame.Day,
+            start=date.today().isoformat(),
+        )
+        bars = self.data_client.get_stock_bars(request)
+        symbol_bars = bars.get(symbol, [])
+        if not symbol_bars:
+            raise ValueError(f"No bar data for {symbol} today")
+        return int(symbol_bars[-1].volume)
+
     def place_bracket_order(
         self,
         symbol: str,
@@ -113,6 +129,19 @@ class AlpacaClient:
             "limit_price": float(order.limit_price),
             "status": str(order.status),
         }
+
+    def replace_order_stop(self, order_id: str, new_stop_price: float) -> dict:
+        from alpaca.trading.requests import ReplaceOrderRequest
+        req = ReplaceOrderRequest(stop_price=new_stop_price)
+        result = self.trading_client.replace_order_by_id(order_id, req)
+        return {"id": str(result.id), "status": str(result.status)}
+
+    def place_market_sell(self, symbol: str, qty: int) -> dict:
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        req = MarketOrderRequest(symbol=symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY)
+        result = self.trading_client.submit_order(req)
+        return {"id": str(result.id), "status": str(result.status)}
 
     async def start_trading_stream(self) -> None:
         """Subscribe to order fill events. Runs as a background asyncio task.

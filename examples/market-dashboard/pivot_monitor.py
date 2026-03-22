@@ -43,6 +43,9 @@ class PivotWatchlistMonitor:
         cache_dir: Path,
         rule_store=None,
         multiplier_store=None,
+        pdt_tracker=None,
+        drawdown_tracker=None,
+        earnings_blackout=None,
         _search_fn: Optional[Callable[[str], list[str]]] = None,
         _data_stream=None,
     ):
@@ -51,6 +54,9 @@ class PivotWatchlistMonitor:
         self._cache_dir = cache_dir
         self._rule_store = rule_store
         self._multiplier_store = multiplier_store
+        self._pdt_tracker = pdt_tracker
+        self._drawdown_tracker = drawdown_tracker
+        self._earnings_blackout = earnings_blackout
         self._search_fn = _search_fn or _default_search_fn
         self._data_stream = _data_stream
         self._candidates: list[dict] = []
@@ -157,7 +163,7 @@ class PivotWatchlistMonitor:
                 continue
 
             # Breakout detected — run guard rails
-            allowed, reason = self._guard_rails_allow(c)
+            allowed, reason = self._guard_rails_allow(c, tag=tag)
             if not allowed:
                 print(f"[pivot_monitor] {c['symbol']} guard: {reason}", file=sys.stderr)
                 continue
@@ -174,7 +180,7 @@ class PivotWatchlistMonitor:
                 self._triggered.add(c["symbol"])
             self._fire_order(c, tag)
 
-    def _guard_rails_allow(self, candidate: dict) -> tuple[bool, str]:
+    def _guard_rails_allow(self, candidate: dict, tag: str = "CLEAR") -> tuple[bool, str]:
         """Check all guard rails. Returns (allowed, reason)."""
         if not _market_is_open_now():
             return False, "outside market hours"
@@ -199,6 +205,68 @@ class PivotWatchlistMonitor:
                 return False, f"max_positions={max_pos} reached"
         except Exception:  # fail closed — any Alpaca error blocks the order
             return False, "could not check positions"
+
+        # PDT selectivity
+        if self._pdt_tracker is not None:
+            from datetime import date as _date
+            allowed_tags = self._pdt_tracker.get_allowed_tags(_date.today())
+            if not allowed_tags:
+                return False, "PDT: 3 day trades used — no new entries"
+            if tag not in allowed_tags:
+                return False, f"PDT: {len(allowed_tags)} slot(s) left — {tag} not allowed"
+
+        # Drawdown circuit breaker
+        if self._drawdown_tracker is not None:
+            settings = self._settings.load()
+            try:
+                acct = self._alpaca.get_account()
+                portfolio_value = float(acct["portfolio_value"])
+                max_weekly = settings.get("max_weekly_drawdown_pct", 10.0)
+                max_daily = settings.get("max_daily_loss_pct", 5.0)
+                from datetime import date as _date
+                self._drawdown_tracker.update(portfolio_value, _date.today())
+                if self._drawdown_tracker.is_weekly_limit_breached(portfolio_value, max_weekly):
+                    return False, f"drawdown: weekly limit {max_weekly}% breached"
+                if self._drawdown_tracker.is_daily_limit_breached(portfolio_value, max_daily):
+                    return False, f"drawdown: daily limit {max_daily}% breached"
+            except Exception as e:
+                print(f"[pivot_monitor] drawdown check error: {e}", file=sys.stderr)
+
+        # Earnings blackout
+        if self._earnings_blackout is not None:
+            settings = self._settings.load()
+            blackout_days = settings.get("earnings_blackout_days", 5)
+            symbol = candidate.get("symbol", "")
+            from datetime import date as _date
+            if self._earnings_blackout.is_blacked_out(symbol, _date.today(), blackout_days):
+                return False, f"earnings blackout: {symbol} reports within {blackout_days} days"
+
+        # Volume confirmation
+        min_vol_ratio = settings.get("min_volume_ratio", 1.5)
+        if min_vol_ratio > 0:
+            avg_vol = candidate.get("avg_volume_20d")
+            if avg_vol:
+                try:
+                    current_vol = self._alpaca.get_current_volume(candidate["symbol"])
+                    if current_vol < avg_vol * min_vol_ratio:
+                        return False, (
+                            f"volume {current_vol}/{int(avg_vol)} "
+                            f"below {min_vol_ratio}x threshold"
+                        )
+                except Exception:
+                    pass  # fail open
+
+        # Time-of-day soft lock
+        avoid_min = settings.get("avoid_open_close_minutes", 30)
+        if avoid_min > 0:
+            now_et = datetime.now(ZoneInfo("America/New_York"))
+            market_open = now_et.replace(hour=9, minute=30, second=0, microsecond=0)
+            market_close = now_et.replace(hour=16, minute=0, second=0, microsecond=0)
+            minutes_since_open = (now_et - market_open).total_seconds() / 60
+            minutes_to_close = (market_close - now_et).total_seconds() / 60
+            in_soft_lock = minutes_since_open < avoid_min or minutes_to_close < avoid_min
+            if in_soft_lock and tag != "HIGH_CONVICTION":
+                return False, f"time-of-day soft lock: {tag} blocked in open/close window"
 
         return True, ""
 
@@ -272,7 +340,9 @@ class PivotWatchlistMonitor:
 
         max_dollar = portfolio_value * (max_pos_pct / 100)
         max_qty_by_size = int(max_dollar / entry_price)
-        return min(qty, max_qty_by_size)
+        raw_qty = min(qty, max_qty_by_size)
+        breadth_mult = self._get_breadth_multiplier()
+        return max(1, int(raw_qty * breadth_mult))
 
     def _log_trade(
         self, candidate: dict, order_id: str,
@@ -326,6 +396,147 @@ class PivotWatchlistMonitor:
             return data.get(field)
         except Exception:
             return None
+
+    def _check_exit_management(self) -> None:
+        from pivot_monitor import _market_is_open_now
+        if not _market_is_open_now():
+            return
+        settings = self._settings.load()
+        trades_file = self._cache_dir / "auto_trades.json"
+        if not trades_file.exists():
+            return
+        try:
+            data = json.loads(trades_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            return
+        open_trades = [t for t in data.get("trades", []) if t.get("outcome") is None]
+        if not open_trades:
+            return
+        changed = False
+        for trade in open_trades:
+            try:
+                changed |= self._apply_trailing_stop(trade, settings)
+                changed |= self._apply_partial_exit(trade, settings)
+                changed |= self._apply_time_stop(trade, settings)
+            except Exception as e:
+                print(f"[exit_mgmt] {trade.get('symbol')} error: {e}", file=sys.stderr)
+        if changed:
+            trades_file.write_text(json.dumps(data, indent=2))
+
+    def _apply_trailing_stop(self, trade: dict, settings: dict) -> bool:
+        if not settings.get("trailing_stop_enabled", True):
+            return False
+        entry = trade.get("entry_price")
+        stop = trade.get("stop_price")
+        stop_order_id = trade.get("stop_order_id")
+        if not all([entry, stop, stop_order_id]):
+            return False
+        try:
+            current_price = self._alpaca.get_last_price(trade["symbol"])
+        except Exception:
+            return False
+        risk = entry - stop
+        if risk <= 0:
+            return False
+        current_r = (current_price - entry) / risk
+        new_stop = None
+        if current_r >= 2.0 and stop < entry + risk:
+            new_stop = round(entry + risk, 2)
+        elif current_r >= 1.0 and stop < entry:
+            new_stop = entry
+        if new_stop is not None and new_stop > stop:
+            try:
+                self._alpaca.replace_order_stop(stop_order_id, new_stop)
+                trade["stop_price"] = new_stop
+                trade["trailing_stop_level"] = new_stop
+                return True
+            except Exception as e:
+                print(f"[trailing_stop] {trade['symbol']} replace failed: {e}", file=sys.stderr)
+        return False
+
+    def _apply_partial_exit(self, trade: dict, settings: dict) -> bool:
+        if not settings.get("partial_exit_enabled", True):
+            return False
+        if trade.get("partial_exit_done"):
+            return False
+        entry = trade.get("entry_price")
+        stop = trade.get("stop_price")
+        qty = trade.get("qty")
+        if not all([entry, stop, qty]):
+            return False
+        try:
+            current_price = self._alpaca.get_last_price(trade["symbol"])
+        except Exception:
+            return False
+        risk = entry - stop
+        if risk <= 0:
+            return False
+        target_r = settings.get("partial_exit_at_r", 1.0)
+        current_r = (current_price - entry) / risk
+        if current_r < target_r:
+            return False
+        exit_pct = settings.get("partial_exit_pct", 50)
+        shares_to_sell = max(1, int(qty * exit_pct / 100))
+        try:
+            self._alpaca.place_market_sell(trade["symbol"], shares_to_sell)
+            trade["partial_exit_done"] = True
+            trade["partial_exit_price"] = current_price
+            trade["partial_exit_qty"] = shares_to_sell
+            return True
+        except Exception as e:
+            print(f"[partial_exit] {trade['symbol']} sell failed: {e}", file=sys.stderr)
+            trade["partial_exit_done"] = True
+        return False
+
+    def _apply_time_stop(self, trade: dict, settings: dict) -> bool:
+        time_stop_days = settings.get("time_stop_days", 5)
+        if time_stop_days == 0:
+            return False
+        entry_time_str = trade.get("entry_time")
+        if not entry_time_str:
+            return False
+        entry_dt = datetime.fromisoformat(entry_time_str)
+        now = datetime.now(timezone.utc)
+        days_open = (now - entry_dt).days
+        if days_open < time_stop_days:
+            return False
+        entry = trade.get("entry_price")
+        stop = trade.get("stop_price")
+        qty = trade.get("qty")
+        if not all([entry, stop, qty]):
+            return False
+        try:
+            current_price = self._alpaca.get_last_price(trade["symbol"])
+        except Exception:
+            return False
+        risk = entry - stop
+        if risk <= 0:
+            return False
+        current_r = abs((current_price - entry) / risk)
+        if current_r > 0.5:
+            return False
+        try:
+            self._alpaca.place_market_sell(trade["symbol"], qty)
+            trade["outcome"] = "time_stop"
+            trade["exit_price"] = current_price
+            return True
+        except Exception as e:
+            print(f"[time_stop] {trade['symbol']} exit failed: {e}", file=sys.stderr)
+        return False
+
+    def _get_breadth_multiplier(self) -> float:
+        """Returns size multiplier based on market breadth. 1.0 = full size."""
+        settings = self._settings.load()
+        threshold = settings.get("breadth_threshold_pct", 60.0)
+        reduction = settings.get("breadth_size_reduction_pct", 50.0)
+        try:
+            data = json.loads((self._cache_dir / "market-breadth.json").read_text())
+            pct_above_50ma = float(data.get("pct_above_50ma", 100.0))
+            if pct_above_50ma < threshold:
+                return 1.0 - (reduction / 100.0)
+        except Exception:
+            pass
+        return 1.0
 
     # ── Alpaca data WebSocket subscription ────────────────────────────────
 

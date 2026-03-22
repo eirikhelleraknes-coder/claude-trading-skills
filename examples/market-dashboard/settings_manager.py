@@ -20,6 +20,18 @@ _DEFAULTS = {
     "max_positions": DEFAULT_MAX_POSITIONS,
     "max_position_size_pct": DEFAULT_MAX_POSITION_SIZE_PCT,
     "environment": "paper",
+    "max_weekly_drawdown_pct": 10.0,
+    "max_daily_loss_pct": 5.0,
+    "earnings_blackout_days": 5,
+    "min_volume_ratio": 1.5,
+    "avoid_open_close_minutes": 30,
+    "breadth_threshold_pct": 60.0,
+    "breadth_size_reduction_pct": 50.0,
+    "trailing_stop_enabled": True,
+    "partial_exit_enabled": True,
+    "partial_exit_at_r": 1.0,
+    "partial_exit_pct": 50,
+    "time_stop_days": 5,
 }
 
 

@@ -302,3 +302,75 @@ def test_order_preview_includes_multiplier_in_response(monkeypatch):
     })
     assert r.status_code == 200
     assert "×" in r.text or "x R" in r.text.lower()
+
+
+def test_new_settings_fields_save_and_load_round_trip():
+    """New capital-protection fields must persist through POST and appear in GET."""
+    client = make_client()
+    r = client.post("/api/settings", data={
+        "mode": "advisory",
+        "default_risk_pct": "1.0",
+        "max_positions": "5",
+        "max_position_size_pct": "10.0",
+        "environment": "paper",
+        "max_weekly_drawdown_pct": "8.0",
+        "max_daily_loss_pct": "3.5",
+        "earnings_blackout_days": "7",
+    })
+    assert r.status_code == 200
+    from settings_manager import SettingsManager
+    s = SettingsManager().load()
+    assert s["max_weekly_drawdown_pct"] == 8.0
+    assert s["max_daily_loss_pct"] == 3.5
+    assert s["earnings_blackout_days"] == 7
+
+
+def test_new_settings_fields_have_defaults_when_not_set():
+    """When settings.json is absent, new fields must return their defaults."""
+    from settings_manager import SettingsManager
+    s = SettingsManager().load()
+    assert s["max_weekly_drawdown_pct"] == 10.0
+    assert s["max_daily_loss_pct"] == 5.0
+    assert s["earnings_blackout_days"] == 5
+
+
+def test_settings_form_includes_new_fields():
+    """GET /api/settings HTML must contain the three new input field names."""
+    client = make_client()
+    r = client.get("/api/settings")
+    assert r.status_code == 200
+    assert b"max_weekly_drawdown_pct" in r.content
+    assert b"max_daily_loss_pct" in r.content
+    assert b"earnings_blackout_days" in r.content
+
+
+def test_tier2_settings_fields_round_trip():
+    """All 4 Tier 2 settings fields survive a POST /api/settings round-trip."""
+    client = make_client()
+    r = client.post("/api/settings", data={
+        "mode": "advisory",
+        "default_risk_pct": "1.0",
+        "max_positions": "5",
+        "max_position_size_pct": "10.0",
+        "environment": "paper",
+        "min_volume_ratio": "2.0",
+        "avoid_open_close_minutes": "15",
+        "breadth_threshold_pct": "55.0",
+        "breadth_size_reduction_pct": "40.0",
+    })
+    assert r.status_code == 200
+    from settings_manager import SettingsManager
+    saved = SettingsManager().load()
+    assert saved["min_volume_ratio"] == 2.0
+    assert saved["avoid_open_close_minutes"] == 15
+    assert saved["breadth_threshold_pct"] == 55.0
+    assert saved["breadth_size_reduction_pct"] == 40.0
+
+def test_tier2_defaults_present_without_settings_file():
+    """When settings.json doesn't exist, all Tier 2 defaults must be returned."""
+    from settings_manager import SettingsManager
+    s = SettingsManager().load()
+    assert s.get("min_volume_ratio") == 1.5
+    assert s.get("avoid_open_close_minutes") == 30
+    assert s.get("breadth_threshold_pct") == 60.0
+    assert s.get("breadth_size_reduction_pct") == 50.0

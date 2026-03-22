@@ -193,6 +193,13 @@ def create_scheduler(
             replace_existing=True,
         )
 
+        sched.add_job(
+            lambda: pivot_monitor._check_exit_management(),
+            IntervalTrigger(minutes=5),
+            id="exit_management",
+            replace_existing=True,
+        )
+
     if pattern_extractor is not None:
         sched.add_job(
             pattern_extractor.extract,
