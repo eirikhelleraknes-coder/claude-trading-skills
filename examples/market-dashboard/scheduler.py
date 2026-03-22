@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -64,7 +65,6 @@ def _make_open_once_job(runner, skill_name: str, cache_dir: Path):
         cache_file = cache_dir / f"{skill_name}.json"
         if cache_file.exists():
             try:
-                import json
                 data = json.loads(cache_file.read_text())
                 cached_date = data.get("generated_at", "")[:10]
                 if cached_date == today:
@@ -165,7 +165,9 @@ def create_scheduler(
     if pivot_monitor is not None:
         def stage1_job():
             candidates = pivot_monitor.load_candidates()
-            pivot_monitor._candidates = pivot_monitor.run_stage1_check(candidates)
+            tagged = pivot_monitor.run_stage1_check(candidates)
+            with pivot_monitor._lock:
+                pivot_monitor._candidates = tagged
 
         sched.add_job(
             stage1_job,

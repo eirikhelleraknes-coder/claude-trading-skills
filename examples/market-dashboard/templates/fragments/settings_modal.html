@@ -56,18 +56,30 @@
       </div>
     </form>
     <script>
-    function handleSettingsSubmit(form) {
-      var env = form.querySelector('[name=environment]').value;
-      if (env === 'live') {
-        var typed = prompt('Type exactly to confirm:\n\nCONFIRM LIVE TRADING');
-        if (typed !== 'CONFIRM LIVE TRADING') {
-          alert('Confirmation did not match. Live trading not enabled.');
-          return false;
-        }
-        document.getElementById('live-confirm-input').value = typed;
-      }
-      return true;
+function handleSettingsSubmit(form) {
+  var mode = form.querySelector('[name=mode]').value;
+  var env = form.querySelector('[name=environment]').value;
+
+  if (mode === 'auto') {
+    var ok = confirm(
+      'Enable Level 3 Auto Trading?\n\n' +
+      'The bot will place bracket orders automatically when VCP pivot ' +
+      'breakouts are detected.\n\n' +
+      'Recommended: test on Paper first. Click OK to enable Auto mode.'
+    );
+    if (!ok) return false;
+  }
+
+  if (env === 'live') {
+    var typed = prompt('Type exactly to confirm:\n\nCONFIRM LIVE TRADING');
+    if (typed !== 'CONFIRM LIVE TRADING') {
+      alert('Confirmation did not match. Live trading not enabled.');
+      return false;
     }
+    document.getElementById('live-confirm-input').value = typed;
+  }
+  return true;
+}
     </script>
   </div>
 </div>

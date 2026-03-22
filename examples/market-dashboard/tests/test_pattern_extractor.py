@@ -163,3 +163,96 @@ def test_extract_updates_existing_rule_confidence():
         extractor.extract()
         rule = next(r for r in store.load()["rules"] if r["id"] == "auto_uncertain_to_blocked")
         assert rule["sample_count"] == 9
+
+
+# ── New helpers and tests ──
+
+def make_extractor_with_mstore(tmp_path: Path, alpaca=None):
+    if alpaca is None:
+        alpaca = MagicMock()
+        alpaca.is_configured = False
+    from learning.multiplier_store import MultiplierStore
+    rule_store = RuleStore(tmp_path / "learned_rules.json")
+    mstore = MultiplierStore(
+        learned_file=tmp_path / "learned_multipliers.json",
+        seed_file=tmp_path / "seed_multipliers.json",
+    )
+    extractor = PatternExtractor(
+        alpaca_client=alpaca,
+        rule_store=rule_store,
+        cache_dir=tmp_path,
+        multiplier_store=mstore,
+    )
+    return extractor, mstore
+
+
+def test_refresh_saves_exit_price_to_trade_entry():
+    with tempfile.TemporaryDirectory() as d:
+        write_trades(Path(d), [{
+            "symbol": "AAPL", "confidence_tag": "CLEAR", "outcome": None,
+            "order_id": "ord1", "entry_price": 155.0,
+        }])
+        alpaca = MagicMock()
+        alpaca.is_configured = True
+        tp_leg = MagicMock()
+        tp_leg.side = "sell"; tp_leg.status = "filled"; tp_leg.filled_avg_price = 163.0
+        order = MagicMock(); order.legs = [tp_leg]
+        alpaca.trading_client.get_order_by_id.return_value = order
+
+        extractor, _ = make_extractor(Path(d), alpaca=alpaca)
+        extractor.refresh_trade_outcomes()
+        trades = json.loads((Path(d) / "auto_trades.json").read_text())["trades"]
+        assert trades[0]["exit_price"] == 163.0
+
+
+def test_extract_updates_multiplier_store_for_winning_trade():
+    with tempfile.TemporaryDirectory() as d:
+        # entry=100, stop=97, exit=109 → risk=3, achieved_rr = (109-100)/3 = 3.0
+        write_trades(Path(d), [{
+            "symbol": "AAPL", "confidence_tag": "CLEAR", "screener": "vcp",
+            "regime": "bull", "outcome": "win",
+            "entry_price": 100.0, "stop_price": 97.0, "exit_price": 109.0,
+        }])
+        extractor, mstore = make_extractor_with_mstore(Path(d))
+        extractor.extract()
+        data = json.loads((Path(d) / "learned_multipliers.json").read_text())
+        assert "vcp+CLEAR+bull" in data
+        assert data["vcp+CLEAR+bull"]["observed_rr"] == [3.0]
+
+
+def test_extract_does_not_update_multiplier_for_losing_trade():
+    with tempfile.TemporaryDirectory() as d:
+        write_trades(Path(d), [{
+            "symbol": "AAPL", "confidence_tag": "CLEAR", "screener": "vcp",
+            "regime": "bull", "outcome": "loss",
+            "entry_price": 100.0, "stop_price": 97.0, "exit_price": 96.0,
+        }])
+        extractor, mstore = make_extractor_with_mstore(Path(d))
+        extractor.extract()
+        assert not (Path(d) / "learned_multipliers.json").exists()
+
+
+def test_extract_skips_trade_missing_stop_price():
+    with tempfile.TemporaryDirectory() as d:
+        write_trades(Path(d), [{
+            "symbol": "AAPL", "confidence_tag": "CLEAR", "screener": "vcp",
+            "regime": "bull", "outcome": "win",
+            "entry_price": 100.0, "exit_price": 109.0,
+            # stop_price missing — must skip without error
+        }])
+        extractor, mstore = make_extractor_with_mstore(Path(d))
+        extractor.extract()  # must not raise
+        assert not (Path(d) / "learned_multipliers.json").exists()
+
+
+def test_extract_skips_trade_missing_regime():
+    with tempfile.TemporaryDirectory() as d:
+        write_trades(Path(d), [{
+            "symbol": "AAPL", "confidence_tag": "CLEAR", "screener": "vcp",
+            "outcome": "win",
+            "entry_price": 100.0, "stop_price": 97.0, "exit_price": 109.0,
+            # regime missing — must skip without error
+        }])
+        extractor, mstore = make_extractor_with_mstore(Path(d))
+        extractor.extract()  # must not raise
+        assert not (Path(d) / "learned_multipliers.json").exists()

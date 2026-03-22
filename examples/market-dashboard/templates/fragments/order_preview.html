@@ -13,6 +13,13 @@
     <div><span style="color:#8b949e;">Risk/sh:</span> ${{ "%.2f"|format(entry_price - stop_price) }}</div>
   </div>
 
+  <!-- Take-profit multiplier (learned from trade history) -->
+  <div style="margin-bottom:10px; padding:5px 8px; background:#162032; border-radius:4px; font-size:11px;">
+    <span style="color:#8b949e;">Take-profit:</span>
+    <span style="color:#4ade80; font-weight:bold;">{{ "%.1f"|format(multiplier) }}× R</span>
+    <span style="color:#8b949e; margin-left:6px;">— {{ multiplier_source }}</span>
+  </div>
+
   <!-- Three-button mode selector -->
   <div style="display:flex; gap:4px; margin-bottom:10px;">
     <button class="op-btn op-active" id="op-btn-risk-{{ symbol }}"
@@ -71,6 +78,8 @@
   var RISK_PER_SH = ENTRY - STOP;
   var ACCOUNT = {{ account_value }};
   var DEFAULT_RISK = {{ default_risk_pct }};
+  var SKILL = "{{ skill }}";
+  var CONFIDENCE_TAG = "CLEAR";
   var mode = 'risk_pct';
 
   if (RISK_PER_SH <= 0 || ENTRY <= 0) {
@@ -152,7 +161,7 @@
     fetch('/api/order/confirm', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({symbol: sym, qty: shares, limit_price: entry, stop_price: stop})
+      body: JSON.stringify({symbol: sym, qty: shares, limit_price: entry, stop_price: stop, skill: SKILL, confidence_tag: CONFIDENCE_TAG})
     }).then(function(r) { return r.json(); }).then(function(data) {
       var el = document.getElementById('order-preview-' + sym);
       if (data.ok) {

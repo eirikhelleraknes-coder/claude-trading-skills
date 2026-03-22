@@ -1,6 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
 
+{% if settings.mode == 'auto' %}
+<div class="auto-banner">
+  🤖 <strong>AUTO MODE ACTIVE</strong>
+  {% if settings.environment == 'live' %}
+  <span style="color:#f87171; font-weight:bold; margin-left:8px;">💰 LIVE — real money at risk</span>
+  {% else %}
+  <span style="color:#4ade80; margin-left:8px;">📄 PAPER — simulated only</span>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="main-grid">
   <!-- Left: TradingView chart -->
   <div class="chart-container">

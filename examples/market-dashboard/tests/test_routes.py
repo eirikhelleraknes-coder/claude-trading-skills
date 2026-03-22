@@ -127,6 +127,29 @@ def test_order_preview_endpoint_exists():
     assert r.status_code == 403
 
 
+def test_dashboard_shows_auto_banner_in_auto_mode():
+    """When settings mode=auto, dashboard HTML must contain auto-banner element."""
+    client = make_client()
+    # Set mode to auto first
+    r = client.post("/api/settings", data={
+        "mode": "auto", "default_risk_pct": "1.0",
+        "max_positions": "5", "max_position_size_pct": "10.0",
+        "environment": "paper",
+    })
+    assert r.status_code == 200
+
+    r = client.get("/")
+    assert r.status_code == 200
+    assert b"auto-banner" in r.content
+
+
+def test_dashboard_no_auto_banner_in_advisory_mode():
+    """Advisory mode must not show auto-banner."""
+    client = make_client()
+    r = client.get("/")
+    assert b"auto-banner" not in r.content
+
+
 def test_order_confirm_advisory_mode_returns_403():
     """Advisory mode (the default) never executes orders — must return 403."""
     client = make_client()
@@ -186,3 +209,96 @@ def test_monitor_status_returns_json():
     assert "active" in data
     assert "candidate_count" in data
     assert "triggered" in data
+
+
+def test_order_confirm_in_advisory_mode_returns_403():
+    client = make_client()
+    r = client.post("/api/order/confirm", json={
+        "symbol": "AAPL", "qty": 10, "limit_price": 155.0, "stop_price": 150.0,
+        "skill": "vcp", "confidence_tag": "CLEAR",
+    })
+    assert r.status_code == 403
+
+
+def test_order_confirm_passes_take_profit_price_to_alpaca(monkeypatch):
+    """order_confirm must pass an explicit take_profit_price, not rely on 2:1 default."""
+    from main import alpaca
+    from config import SETTINGS_FILE
+    import json
+
+    captured = {}
+
+    def fake_place(symbol, qty, limit_price, stop_price, take_profit_price=None):
+        captured["take_profit_price"] = take_profit_price
+        return {"id": "ord1", "symbol": symbol, "qty": qty, "limit_price": limit_price, "status": "new"}
+
+    monkeypatch.setattr(alpaca, "api_key", "test")
+    monkeypatch.setattr(alpaca, "secret_key", "test")
+    monkeypatch.setattr(alpaca, "place_bracket_order", fake_place)
+    SETTINGS_FILE.write_text(json.dumps({"mode": "auto", "environment": "paper"}))
+
+    client = make_client()
+    r = client.post("/api/order/confirm", json={
+        "symbol": "AAPL", "qty": 10, "limit_price": 155.0, "stop_price": 150.0,
+        "skill": "vcp", "confidence_tag": "CLEAR",
+    })
+    assert r.status_code == 200
+    assert r.json()["ok"] is True
+    assert captured.get("take_profit_price") is not None
+    assert captured["take_profit_price"] > 155.0
+
+
+def test_order_confirm_missing_regime_cache_does_not_error(monkeypatch, tmp_path):
+    """Missing macro-regime cache must not block order placement."""
+    from main import alpaca
+    from config import SETTINGS_FILE, CACHE_DIR
+    import json, shutil
+
+    monkeypatch.setattr(alpaca, "api_key", "test")
+    monkeypatch.setattr(alpaca, "secret_key", "test")
+    monkeypatch.setattr(
+        alpaca, "place_bracket_order",
+        lambda symbol, qty, limit_price, stop_price, take_profit_price=None: {
+            "id": "ord2", "symbol": symbol, "qty": qty,
+            "limit_price": limit_price, "status": "new",
+        }
+    )
+    SETTINGS_FILE.write_text(json.dumps({"mode": "auto", "environment": "paper"}))
+
+    regime_file = CACHE_DIR / "macro-regime-detector.json"
+    backup = tmp_path / "macro-regime-detector.json.bak"
+    existed = regime_file.exists()
+    if existed:
+        shutil.copy(regime_file, backup)
+        regime_file.unlink()
+    try:
+        client = make_client()
+        r = client.post("/api/order/confirm", json={
+            "symbol": "AAPL", "qty": 5, "limit_price": 100.0, "stop_price": 97.0,
+            "skill": "vcp", "confidence_tag": "CLEAR",
+        })
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+    finally:
+        if existed:
+            shutil.copy(backup, regime_file)
+
+
+def test_order_preview_includes_multiplier_in_response(monkeypatch):
+    """order_preview HTML must contain the take-profit multiplier."""
+    from main import alpaca
+    from config import SETTINGS_FILE
+    import json
+
+    monkeypatch.setattr(alpaca, "api_key", "test")
+    monkeypatch.setattr(alpaca, "secret_key", "test")
+    monkeypatch.setattr(alpaca, "get_last_price", lambda sym: 155.0)
+    monkeypatch.setattr(alpaca, "get_account", lambda: {"portfolio_value": 100_000.0})
+    SETTINGS_FILE.write_text(json.dumps({"mode": "auto", "environment": "paper"}))
+
+    client = make_client()
+    r = client.post("/api/order/preview", data={
+        "symbol": "AAPL", "entry_price": "155.0", "stop_price": "150.0", "skill": "vcp",
+    })
+    assert r.status_code == 200
+    assert "×" in r.text or "x R" in r.text.lower()

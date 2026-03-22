@@ -6,21 +6,19 @@ from pathlib import Path
 
 from learning.rule_store import RuleStore, MIN_SAMPLE_COUNT
 
-LOSS_RATE_THRESHOLD = 0.60  # activate UNCERTAIN→BLOCKED rule above this stop-out rate
+LOSS_RATE_THRESHOLD = 0.60
 
 
 class PatternExtractor:
-    """Weekly job: reads auto_trades.json, resolves outcomes from Alpaca, updates rule_store.
-
-    Flow: extract() → refresh_trade_outcomes() → analyze trades with outcomes → update rules.
-    Additional rule types (market top, breadth correlation) deferred to Plan 3b once
-    sufficient trade history accumulates.
+    """Weekly job: reads auto_trades.json, resolves outcomes from Alpaca,
+    updates multiplier_store (for R:R learning) and rule_store (for entry filtering).
     """
 
-    def __init__(self, alpaca_client, rule_store: RuleStore, cache_dir: Path):
+    def __init__(self, alpaca_client, rule_store: RuleStore, cache_dir: Path, multiplier_store=None):
         self._alpaca = alpaca_client
         self._rule_store = rule_store
         self._cache_dir = cache_dir
+        self._multiplier_store = multiplier_store
 
     def load_trades(self) -> list[dict]:
         trades_file = self._cache_dir / "auto_trades.json"
@@ -32,7 +30,7 @@ class PatternExtractor:
             return []
 
     def extract(self) -> dict:
-        """Run extraction: refresh outcomes, analyze, update rule_store."""
+        """Refresh outcomes, update multipliers, update entry filter rules."""
         self.refresh_trade_outcomes()
 
         all_trades = self.load_trades()
@@ -40,6 +38,9 @@ class PatternExtractor:
 
         if not trades:
             return {"trades_analyzed": 0, "rules_updated": 0}
+
+        if self._multiplier_store is not None:
+            self._update_multipliers(trades)
 
         stats = self._compute_stats(trades)
         new_rules, updated_ids = self._generate_rules(stats)
@@ -50,13 +51,23 @@ class PatternExtractor:
             "rules_updated": len(new_rules) + len(updated_ids),
         }
 
-    def refresh_trade_outcomes(self) -> int:
-        """Query Alpaca closed bracket order legs to populate outcome fields.
+    def _update_multipliers(self, trades: list[dict]) -> None:
+        """Update MultiplierStore for each winning trade with all required fields."""
+        required = ("exit_price", "stop_price", "entry_price", "screener", "confidence_tag", "regime")
+        for t in trades:
+            if t.get("outcome") != "win":
+                continue
+            if any(t.get(f) is None for f in required):
+                continue
+            risk = t["entry_price"] - t["stop_price"]
+            if risk <= 0:
+                continue
+            achieved_rr = (t["exit_price"] - t["entry_price"]) / risk
+            bucket_key = f"{t['screener']}+{t['confidence_tag']}+{t['regime']}"
+            self._multiplier_store.update(bucket_key, achieved_rr)
 
-        For each auto trade with outcome=None: look up the bracket order in Alpaca,
-        find the filled sell leg, compare exit price to entry price → 'win' or 'loss'.
-        Returns number of trades updated.
-        """
+    def refresh_trade_outcomes(self) -> int:
+        """Query Alpaca closed bracket order legs to populate outcome and exit_price fields."""
         trades_file = self._cache_dir / "auto_trades.json"
         if not trades_file.exists():
             return 0
@@ -74,9 +85,11 @@ class PatternExtractor:
 
         updated = 0
         for trade in open_trades:
-            outcome = self._get_order_outcome(trade["order_id"], trade.get("entry_price", 0))
-            if outcome is not None:
+            result = self._get_order_outcome(trade["order_id"], trade.get("entry_price", 0))
+            if result is not None:
+                outcome, exit_price = result
                 trade["outcome"] = outcome
+                trade["exit_price"] = exit_price
                 updated += 1
 
         if updated:
@@ -84,8 +97,8 @@ class PatternExtractor:
 
         return updated
 
-    def _get_order_outcome(self, order_id: str, entry_price: float) -> str | None:
-        """Look up bracket order in Alpaca. Returns 'win', 'loss', or None if still open."""
+    def _get_order_outcome(self, order_id: str, entry_price: float) -> tuple[str, float] | None:
+        """Returns (outcome, exit_price) or None if order still open."""
         try:
             order = self._alpaca.trading_client.get_order_by_id(order_id)
             if not hasattr(order, "legs") or not order.legs:
@@ -97,7 +110,8 @@ class PatternExtractor:
                     exit_price = float(leg.filled_avg_price or 0)
                     if exit_price <= 0:
                         return None
-                    return "win" if exit_price > entry_price else "loss"
+                    outcome = "win" if exit_price > entry_price else "loss"
+                    return (outcome, exit_price)
             return None
         except Exception:
             return None
@@ -115,7 +129,6 @@ class PatternExtractor:
         return stats
 
     def _generate_rules(self, stats: dict) -> tuple[list[dict], set[str]]:
-        """Generate or update rules. Returns (new_rules, update_ids)."""
         new_rules = []
         update_ids: set[str] = set()
         existing_ids = {r["id"] for r in self._rule_store.load().get("rules", [])}
@@ -152,7 +165,6 @@ class PatternExtractor:
     def _persist_rules(self, new_rules: list[dict], updated_ids: set) -> None:
         if not new_rules:
             return
-        # Reload fresh — _generate_rules may have already written updates to existing rules.
         data = self._rule_store.load()
         data["rules"].extend(new_rules)
         self._rule_store.save(data)

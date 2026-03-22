@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from skills_runner import SkillsRunner
 from alpaca_client import AlpacaClient
 from learning.rule_store import RuleStore
 from learning.pattern_extractor import PatternExtractor
+from learning.multiplier_store import MultiplierStore
 from pivot_monitor import PivotWatchlistMonitor
 
 app = FastAPI(title="Market Dashboard")
@@ -33,16 +35,19 @@ alpaca = AlpacaClient(
     paper=ALPACA_PAPER,
 )
 rule_store = RuleStore()  # defaults to learning/learned_rules.json
+multiplier_store = MultiplierStore()  # uses learning/seed_multipliers.json + learning/learned_multipliers.json
 pivot_monitor = PivotWatchlistMonitor(
     alpaca_client=alpaca,
     settings_manager=settings_manager,
     cache_dir=CACHE_DIR,
     rule_store=rule_store,
+    multiplier_store=multiplier_store,
 )
 pattern_extractor = PatternExtractor(
     alpaca_client=alpaca,
     rule_store=rule_store,
     cache_dir=CACHE_DIR,
+    multiplier_store=multiplier_store,
 )
 _scheduler = None
 
@@ -95,6 +100,44 @@ def _market_state() -> str:
     if t.hour < 16:
         return "market_open"
     return "market_closed"
+
+
+def _read_regime(cache_dir: Path) -> str:
+    """Extract current_regime string from macro-regime-detector cache."""
+    try:
+        data = json.loads((cache_dir / "macro-regime-detector.json").read_text())
+        regime_data = data.get("regime", {})
+        if isinstance(regime_data, dict):
+            return regime_data.get("current_regime", "unknown")
+        return str(regime_data).lower() if regime_data else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _log_manual_trade(body: "OrderConfirmRequest", order_id: str, regime: str) -> None:
+    """Append manual order to auto_trades.json so PatternExtractor can learn from it."""
+    trades_file = CACHE_DIR / "auto_trades.json"
+    try:
+        data = json.loads(trades_file.read_text()) if trades_file.exists() else {"trades": []}
+    except (json.JSONDecodeError, OSError):
+        data = {"trades": []}
+    from datetime import timezone
+    data["trades"].append({
+        "symbol": body.symbol,
+        "order_id": order_id,
+        "entry_time": datetime.now(timezone.utc).isoformat(),
+        "entry_price": body.limit_price,
+        "stop_price": body.stop_price,
+        "qty": body.qty,
+        "confidence_tag": body.confidence_tag,
+        "screener": body.skill,
+        "regime": regime,
+        "outcome": None,
+    })
+    try:
+        trades_file.write_text(json.dumps(data, indent=2))
+    except OSError:
+        pass
 
 
 def _build_signals_context() -> dict[str, Any]:
@@ -159,6 +202,18 @@ async def order_preview(
     # Default stop to 3% below entry when screener doesn't provide one (e.g. CANSLIM, PEAD).
     effective_stop = stop_price if stop_price > 0 else round(live_price * 0.97, 2)
 
+    regime = _read_regime(CACHE_DIR)
+    bucket_key = f"{skill}+CLEAR+{regime}"
+    mult = multiplier_store.get(bucket_key)
+    learned_bucket = multiplier_store._load_learned().get(bucket_key, {})
+    n_real = len(learned_bucket.get("observed_rr", []))
+    from learning.multiplier_store import MIN_SAMPLE_COUNT
+    multiplier_source = (
+        f"based on {n_real} {bucket_key} trades"
+        if n_real >= MIN_SAMPLE_COUNT
+        else "from published research"
+    )
+
     account_value = 100_000.0  # fallback for unconfigured Alpaca
     if alpaca.is_configured:
         try:
@@ -174,6 +229,8 @@ async def order_preview(
         "stop_price": effective_stop,
         "account_value": account_value,
         "default_risk_pct": settings.get("default_risk_pct", 1.0),
+        "multiplier": mult,
+        "multiplier_source": multiplier_source,
     }
     return templates.TemplateResponse("fragments/order_preview.html", ctx)
 
@@ -183,6 +240,8 @@ class OrderConfirmRequest(BaseModel):
     qty: int
     limit_price: float
     stop_price: float
+    skill: str = "unknown"
+    confidence_tag: str = "CLEAR"
 
 
 @app.post("/api/order/confirm")
@@ -192,13 +251,21 @@ async def order_confirm(body: OrderConfirmRequest):
         raise HTTPException(status_code=403, detail="Execute not available in Advisory mode")
     if not alpaca.is_configured:
         return JSONResponse({"ok": False, "error": "Alpaca not configured — set API keys in .env"})
+
+    regime = _read_regime(CACHE_DIR)
+    bucket_key = f"{body.skill}+{body.confidence_tag}+{regime}"
+    mult = multiplier_store.get(bucket_key)
+    take_profit_price = round(body.limit_price + (body.limit_price - body.stop_price) * mult, 2)
+
     try:
         result = alpaca.place_bracket_order(
             symbol=body.symbol,
             qty=body.qty,
             limit_price=body.limit_price,
             stop_price=body.stop_price,
+            take_profit_price=take_profit_price,
         )
+        _log_manual_trade(body, result["id"], regime)
         return JSONResponse({"ok": True, "order_id": result["id"], "status": result["status"]})
     except Exception as e:
         return JSONResponse({"ok": False, "error": str(e)})
@@ -220,10 +287,13 @@ async def api_portfolio(request: Request):
 @app.get("/api/monitor/status")
 async def monitor_status():
     """Return current PivotWatchlistMonitor state for the Auto mode banner."""
+    with pivot_monitor._lock:
+        candidates_snapshot = list(pivot_monitor._candidates)
+        triggered_snapshot = list(pivot_monitor._triggered)
     return JSONResponse({
-        "active": len(pivot_monitor._candidates) > 0,
-        "candidate_count": len(pivot_monitor._candidates),
-        "triggered": list(pivot_monitor._triggered),
+        "active": len(candidates_snapshot) > 0,
+        "candidate_count": len(candidates_snapshot),
+        "triggered": triggered_snapshot,
     })
 
 

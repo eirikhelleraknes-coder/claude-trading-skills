@@ -2,16 +2,12 @@
 """
 FMP API Client for Market Top Detector
 
-Provides rate-limited access to Financial Modeling Prep API endpoints
-for market top detection analysis.
-
-Features:
-- Rate limiting (0.3s between requests)
-- Automatic retry on 429 errors
-- Session caching for duplicate requests
-- Batch quote support for ETF baskets
+Provides rate-limited access to Financial Modeling Prep stable API endpoints
+for market top detection analysis. Falls back to yfinance for
+ETF/index symbols not available on the FMP free plan.
 """
 
+import datetime
 import os
 import sys
 import time
@@ -24,10 +20,60 @@ except ImportError:
     sys.exit(1)
 
 
-class FMPClient:
-    """Client for Financial Modeling Prep API with rate limiting and caching"""
+def _yf_historical(symbol: str, days: int) -> Optional[dict]:
+    """Fetch historical prices via yfinance (fallback for FMP premium symbols)."""
+    try:
+        import yfinance as yf
+        end = datetime.date.today()
+        start = end - datetime.timedelta(days=int(days * 1.6) + 10)
+        ticker = yf.Ticker(symbol)
+        hist = ticker.history(start=str(start), end=str(end))
+        if hist.empty:
+            return None
+        historical = []
+        for date_idx, row in hist.iterrows():
+            historical.append({
+                "date": str(date_idx.date()),
+                "open": round(float(row["Open"]), 4),
+                "high": round(float(row["High"]), 4),
+                "low": round(float(row["Low"]), 4),
+                "close": round(float(row["Close"]), 4),
+                "volume": int(row["Volume"]),
+            })
+        historical.reverse()  # Most recent first
+        return {"symbol": symbol, "historical": historical[:days]}
+    except Exception as e:
+        print(f"WARNING: yfinance historical fallback failed for {symbol}: {e}", file=sys.stderr)
+        return None
 
-    BASE_URL = "https://financialmodelingprep.com/api/v3"
+
+def _yf_quote(symbol: str) -> Optional[list[dict]]:
+    """Fetch quote via yfinance (fallback for FMP premium symbols)."""
+    try:
+        import yfinance as yf
+        ticker = yf.Ticker(symbol)
+        info = ticker.fast_info
+        price = info.last_price
+        if not price:
+            hist = ticker.history(period="2d")
+            if not hist.empty:
+                price = float(hist["Close"].iloc[-1])
+        return [{
+            "symbol": symbol,
+            "price": round(float(price), 4) if price else 0,
+            "yearHigh": round(float(info.year_high), 4) if info.year_high else 0,
+            "yearLow": round(float(info.year_low), 4) if info.year_low else 0,
+            "volume": int(info.last_volume) if info.last_volume else 0,
+        }]
+    except Exception as e:
+        print(f"WARNING: yfinance quote fallback failed for {symbol}: {e}", file=sys.stderr)
+        return None
+
+
+class FMPClient:
+    """Client for Financial Modeling Prep stable API with rate limiting and yfinance fallback."""
+
+    BASE_URL = "https://financialmodelingprep.com/stable"
     RATE_LIMIT_DELAY = 0.3  # 300ms between requests
 
     def __init__(self, api_key: Optional[str] = None):
@@ -38,7 +84,6 @@ class FMPClient:
                 "or pass api_key parameter."
             )
         self.session = requests.Session()
-        self.session.headers.update({"apikey": self.api_key})
         self.cache = {}
         self.last_call_time = 0
         self.rate_limit_reached = False
@@ -50,21 +95,23 @@ class FMPClient:
         if self.rate_limit_reached:
             return None
 
-        if params is None:
-            params = {}
+        req_params = dict(params) if params else {}
+        req_params["apikey"] = self.api_key
 
         elapsed = time.time() - self.last_call_time
         if elapsed < self.RATE_LIMIT_DELAY:
             time.sleep(self.RATE_LIMIT_DELAY - elapsed)
 
         try:
-            response = self.session.get(url, params=params, timeout=30)
+            response = self.session.get(url, params=req_params, timeout=30)
             self.last_call_time = time.time()
             self.api_calls_made += 1
 
             if response.status_code == 200:
                 self.retry_count = 0
                 return response.json()
+            elif response.status_code == 402:
+                return {"_premium": True}
             elif response.status_code == 429:
                 self.retry_count += 1
                 if self.retry_count <= self.max_retries:
@@ -86,46 +133,62 @@ class FMPClient:
             return None
 
     def get_quote(self, symbols: str) -> Optional[list[dict]]:
-        """Fetch real-time quote data for one or more symbols (comma-separated)"""
+        """Fetch real-time quote data for one or more symbols (comma-separated)."""
         cache_key = f"quote_{symbols}"
         if cache_key in self.cache:
             return self.cache[cache_key]
 
-        url = f"{self.BASE_URL}/quote/{symbols}"
-        data = self._rate_limited_get(url)
-        if data:
+        url = f"{self.BASE_URL}/quote"
+        data = self._rate_limited_get(url, {"symbol": symbols})
+        if data is not None and not (isinstance(data, dict) and data.get("_premium")):
             self.cache[cache_key] = data
-        return data
+            return data
+
+        # Fall back to yfinance per symbol
+        results = []
+        for sym in symbols.split(","):
+            sym = sym.strip()
+            yf_data = _yf_quote(sym)
+            if yf_data:
+                results.extend(yf_data)
+        if results:
+            self.cache[cache_key] = results
+        return results if results else None
 
     def get_historical_prices(self, symbol: str, days: int = 365) -> Optional[dict]:
-        """Fetch historical daily OHLCV data"""
+        """Fetch historical daily OHLCV data."""
         cache_key = f"prices_{symbol}_{days}"
         if cache_key in self.cache:
             return self.cache[cache_key]
 
-        url = f"{self.BASE_URL}/historical-price-full/{symbol}"
-        params = {"timeseries": days}
-        data = self._rate_limited_get(url, params)
-        if data:
-            self.cache[cache_key] = data
-        return data
+        end_date = datetime.date.today()
+        start_date = end_date - datetime.timedelta(days=int(days * 1.6) + 10)
+        url = f"{self.BASE_URL}/historical-price-eod/full"
+        data = self._rate_limited_get(url, {"symbol": symbol, "from": str(start_date), "to": str(end_date)})
+
+        if data is not None and not (isinstance(data, dict) and data.get("_premium")):
+            normalized = {"symbol": symbol, "historical": data[:days] if isinstance(data, list) else data}
+            self.cache[cache_key] = normalized
+            return normalized
+
+        # Fall back to yfinance
+        yf_data = _yf_historical(symbol, days)
+        if yf_data:
+            self.cache[cache_key] = yf_data
+        return yf_data
 
     def get_batch_quotes(self, symbols: list[str]) -> dict[str, dict]:
-        """Fetch quotes for a list of symbols, batching up to 5 per request"""
+        """Fetch quotes for a list of symbols."""
         results = {}
-        # FMP supports comma-separated symbols in quote endpoint
-        batch_size = 5
-        for i in range(0, len(symbols), batch_size):
-            batch = symbols[i : i + batch_size]
-            batch_str = ",".join(batch)
-            quotes = self.get_quote(batch_str)
+        for sym in symbols:
+            quotes = self.get_quote(sym)
             if quotes:
                 for q in quotes:
                     results[q["symbol"]] = q
         return results
 
     def get_batch_historical(self, symbols: list[str], days: int = 50) -> dict[str, list[dict]]:
-        """Fetch historical prices for multiple symbols"""
+        """Fetch historical prices for multiple symbols."""
         results = {}
         for symbol in symbols:
             data = self.get_historical_prices(symbol, days=days)
@@ -136,21 +199,17 @@ class FMPClient:
     def calculate_ema(self, prices: list[float], period: int) -> float:
         """Calculate EMA (thin wrapper around math_utils for backward compat)."""
         from calculators.math_utils import calc_ema
-
         return calc_ema(prices, period)
 
     def calculate_sma(self, prices: list[float], period: int) -> float:
         """Calculate SMA (thin wrapper around math_utils for backward compat)."""
         from calculators.math_utils import calc_sma
-
         return calc_sma(prices, period)
 
     def get_vix_term_structure(self) -> Optional[dict]:
         """
         Auto-detect VIX term structure by comparing VIX to VIX3M.
-
-        Returns:
-            Dict with ratio, classification, or None if VIX3M unavailable.
+        Uses yfinance fallback since ^VIX and ^VIX3M are premium on FMP free plan.
         """
         vix_quotes = self.get_quote("^VIX")
         vix3m_quotes = self.get_quote("^VIX3M")

@@ -266,3 +266,78 @@ def test_high_conviction_uses_1_5x_risk():
         qty_normal = monitor._calc_qty(100.0, 97.0, high_conviction=False)
         qty_hc = monitor._calc_qty(100.0, 97.0, high_conviction=True)
         assert qty_hc > qty_normal
+
+
+# ── New tests: multiplier lookup + log field fixes ──
+
+def make_monitor_with_store(tmp_path: Path):
+    from learning.multiplier_store import MultiplierStore
+    alpaca = MagicMock()
+    alpaca.is_configured = True
+    settings = MagicMock()
+    settings.load.return_value = {
+        "mode": "auto", "default_risk_pct": 1.0,
+        "max_positions": 5, "max_position_size_pct": 10.0,
+    }
+    mstore = MultiplierStore(
+        learned_file=tmp_path / "learned_multipliers.json",
+        seed_file=tmp_path / "seed_multipliers.json",
+    )
+    monitor = PivotWatchlistMonitor(
+        alpaca_client=alpaca,
+        settings_manager=settings,
+        cache_dir=tmp_path,
+        multiplier_store=mstore,
+    )
+    return monitor, alpaca
+
+
+def test_fire_order_passes_explicit_take_profit_price():
+    """_fire_order must pass take_profit_price explicitly, not rely on 2:1 default."""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        monitor, alpaca = make_monitor_with_store(tmp)
+        alpaca.get_account.return_value = {"portfolio_value": 100_000.0}
+        alpaca.get_positions.return_value = []
+        alpaca.get_last_price.return_value = 100.0
+        alpaca.place_bracket_order.return_value = {
+            "id": "ord1", "symbol": "AAPL", "qty": 10.0, "limit_price": 100.0, "status": "new"
+        }
+        import pivot_monitor as pm
+        pm._market_is_open_now = lambda: True
+        monitor._fire_order({"symbol": "AAPL", "pivot_price": 99.0}, "CLEAR")
+
+        call_kwargs = alpaca.place_bracket_order.call_args
+        assert call_kwargs is not None
+        assert "take_profit_price" in call_kwargs.kwargs
+        assert call_kwargs.kwargs["take_profit_price"] is not None
+        assert call_kwargs.kwargs["take_profit_price"] > 100.0
+
+
+def test_log_trade_stores_screener_field():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        monitor, alpaca = make_monitor_with_store(tmp)
+        alpaca.get_account.return_value = {"portfolio_value": 100_000.0}
+        monitor._log_trade(
+            {"symbol": "AAPL", "pivot_price": 99.0}, "ord1", 100.0, 97.0, 10, "CLEAR"
+        )
+        trades = json.loads((tmp / "auto_trades.json").read_text())["trades"]
+        assert trades[0]["screener"] == "vcp"
+
+
+def test_log_trade_stores_regime_as_string():
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d)
+        (tmp / "macro-regime-detector.json").write_text(json.dumps({
+            "regime": {"current_regime": "bull", "score": 75}
+        }))
+        monitor, alpaca = make_monitor_with_store(tmp)
+        alpaca.get_account.return_value = {"portfolio_value": 100_000.0}
+        monitor._log_trade(
+            {"symbol": "AAPL", "pivot_price": 99.0}, "ord1", 100.0, 97.0, 10, "CLEAR"
+        )
+        trades = json.loads((tmp / "auto_trades.json").read_text())["trades"]
+        assert trades[0]["regime"] == "bull"
+        assert isinstance(trades[0]["regime"], str)
+        assert "macro_regime" not in trades[0]

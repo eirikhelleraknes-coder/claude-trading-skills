@@ -29,6 +29,21 @@ body.live-auto-mode {
   outline-offset: -3px;
 }
 
+/* Auto mode status banner */
+.auto-banner {
+  background: #1a2a1a;
+  border: 1px solid #4ade80;
+  border-radius: 4px;
+  padding: 6px 12px;
+  margin: 6px 8px;
+  font-size: 12px;
+  color: #e6edf3;
+}
+body.live-auto-mode .auto-banner {
+  background: #2a1a1a;
+  border-color: #f87171;
+}
+
 /* Top bar */
 .topbar {
   background: var(--bg-surface);

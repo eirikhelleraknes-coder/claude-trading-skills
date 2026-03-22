@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -41,6 +42,7 @@ class PivotWatchlistMonitor:
         settings_manager: SettingsManager,
         cache_dir: Path,
         rule_store=None,
+        multiplier_store=None,
         _search_fn: Optional[Callable[[str], list[str]]] = None,
         _data_stream=None,
     ):
@@ -48,10 +50,12 @@ class PivotWatchlistMonitor:
         self._settings = settings_manager
         self._cache_dir = cache_dir
         self._rule_store = rule_store
+        self._multiplier_store = multiplier_store
         self._search_fn = _search_fn or _default_search_fn
         self._data_stream = _data_stream
         self._candidates: list[dict] = []
         self._triggered: set[str] = set()
+        self._lock = threading.Lock()
 
     # ── Candidate loading ────────────────────────────────────────────────────
 
@@ -166,7 +170,8 @@ class PivotWatchlistMonitor:
                     print(f"[pivot_monitor] {c['symbol']} Stage 2 blocked: negative news", file=sys.stderr)
                     continue
 
-            self._triggered.add(c["symbol"])
+            with self._lock:
+                self._triggered.add(c["symbol"])
             self._fire_order(c, tag)
 
     def _guard_rails_allow(self, candidate: dict) -> tuple[bool, str]:
@@ -197,8 +202,19 @@ class PivotWatchlistMonitor:
 
         return True, ""
 
+    def _get_current_regime(self) -> str:
+        """Extract current_regime string from macro-regime-detector cache."""
+        try:
+            data = json.loads((self._cache_dir / "macro-regime-detector.json").read_text())
+            regime_data = data.get("regime", {})
+            if isinstance(regime_data, dict):
+                return regime_data.get("current_regime", "unknown")
+            return str(regime_data).lower() if regime_data else "unknown"
+        except Exception:
+            return "unknown"
+
     def _fire_order(self, candidate: dict, tag: str) -> None:
-        """Fetch live price, calculate qty, place bracket order, log to auto_trades.json."""
+        """Fetch live price, look up learned multiplier, place bracket order, log trade."""
         symbol = candidate["symbol"]
         try:
             entry_price = self._alpaca.get_last_price(symbol)
@@ -207,10 +223,23 @@ class PivotWatchlistMonitor:
             if qty <= 0:
                 print(f"[pivot_monitor] {symbol}: qty=0, skipping", file=sys.stderr)
                 return
+
+            regime = self._get_current_regime()
+            multiplier = 2.0
+            if self._multiplier_store is not None:
+                bucket_key = f"vcp+{tag}+{regime}"
+                multiplier = self._multiplier_store.get(bucket_key)
+            take_profit_price = round(entry_price + (entry_price - stop_price) * multiplier, 2)
+
             result = self._alpaca.place_bracket_order(
                 symbol=symbol, qty=qty, limit_price=entry_price, stop_price=stop_price,
+                take_profit_price=take_profit_price,
             )
-            print(f"[pivot_monitor] ORDER: {symbol} {qty}sh @ {entry_price} | {result}", file=sys.stderr)
+            print(
+                f"[pivot_monitor] ORDER: {symbol} {qty}sh @ {entry_price} "
+                f"tp={take_profit_price} ({multiplier:.1f}x) | {result}",
+                file=sys.stderr,
+            )
         except Exception as e:
             print(f"[pivot_monitor] {symbol} order error: {e}", file=sys.stderr)
             return
@@ -264,7 +293,6 @@ class PivotWatchlistMonitor:
         market_top_score = self._read_cache_field("market-top-detector.json", "risk_score")
         breadth_score = self._read_cache_field("market-breadth-analyzer.json", "breadth_score")
         ftd_score = self._read_cache_field("ftd-detector.json", "ftd_score")
-        macro_regime = self._read_cache_field("macro-regime-detector.json", "regime")
         settings = self._settings.load()
         risk_pct = settings.get("default_risk_pct", 1.0)
         if tag == "HIGH_CONVICTION":
@@ -284,7 +312,8 @@ class PivotWatchlistMonitor:
             "market_top_score": market_top_score,
             "breadth_score": breadth_score,
             "ftd_score": ftd_score,
-            "macro_regime": macro_regime,
+            "regime": self._get_current_regime(),
+            "screener": "vcp",
             # Outcome populated later by PatternExtractor.refresh_trade_outcomes()
             "outcome": None,
         })
@@ -302,8 +331,9 @@ class PivotWatchlistMonitor:
 
     async def start(self, candidates: list[dict]) -> None:
         """Subscribe to Alpaca data WebSocket for candidates and run breakout monitor."""
-        self._candidates = [c for c in candidates if c.get("confidence_tag") != "BLOCKED"]
-        self._triggered.clear()
+        with self._lock:
+            self._candidates = [c for c in candidates if c.get("confidence_tag") != "BLOCKED"]
+            self._triggered.clear()
 
         if not self._candidates:
             return
