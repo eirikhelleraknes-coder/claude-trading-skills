@@ -130,6 +130,19 @@ class AlpacaClient:
             "status": str(order.status),
         }
 
+    def replace_order_stop(self, order_id: str, new_stop_price: float) -> dict:
+        from alpaca.trading.requests import ReplaceOrderRequest
+        req = ReplaceOrderRequest(stop_price=new_stop_price)
+        result = self.trading_client.replace_order_by_id(order_id, req)
+        return {"id": str(result.id), "status": str(result.status)}
+
+    def place_market_sell(self, symbol: str, qty: int) -> dict:
+        from alpaca.trading.requests import MarketOrderRequest
+        from alpaca.trading.enums import OrderSide, TimeInForce
+        req = MarketOrderRequest(symbol=symbol, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.DAY)
+        result = self.trading_client.submit_order(req)
+        return {"id": str(result.id), "status": str(result.status)}
+
     async def start_trading_stream(self) -> None:
         """Subscribe to order fill events. Runs as a background asyncio task.
 

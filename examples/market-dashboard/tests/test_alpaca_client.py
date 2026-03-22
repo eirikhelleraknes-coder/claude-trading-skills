@@ -115,3 +115,65 @@ def test_start_trading_stream_calls_stream_run():
         asyncio.run(client.start_trading_stream())
 
     mock_stream.run.assert_called_once()
+
+
+def make_client(trading_client=None):
+    from alpaca_client import AlpacaClient
+    return AlpacaClient(
+        api_key="test_key",
+        secret_key="test_secret",
+        paper=True,
+        _trading_client=trading_client or MagicMock(),
+    )
+
+
+def test_replace_order_stop_calls_replace_on_trading_client():
+    mock_tc = MagicMock()
+    mock_result = MagicMock()
+    mock_result.id = "ord-abc"
+    mock_result.status = "accepted"
+    mock_tc.replace_order_by_id.return_value = mock_result
+    client = make_client(mock_tc)
+    result = client.replace_order_stop("ord-abc", 98.50)
+    mock_tc.replace_order_by_id.assert_called_once()
+    assert result == {"id": "ord-abc", "status": "accepted"}
+
+
+def test_replace_order_stop_passes_new_stop_price():
+    mock_tc = MagicMock()
+    mock_result = MagicMock()
+    mock_result.id = "ord-xyz"
+    mock_result.status = "pending_replace"
+    mock_tc.replace_order_by_id.return_value = mock_result
+    client = make_client(mock_tc)
+    client.replace_order_stop("ord-xyz", 102.25)
+    replace_req = mock_tc.replace_order_by_id.call_args[0][1]
+    assert replace_req.stop_price == 102.25
+
+
+def test_place_market_sell_calls_submit_order():
+    mock_tc = MagicMock()
+    mock_result = MagicMock()
+    mock_result.id = "sell-ord-1"
+    mock_result.status = "new"
+    mock_tc.submit_order.return_value = mock_result
+    client = make_client(mock_tc)
+    result = client.place_market_sell("AAPL", 10)
+    mock_tc.submit_order.assert_called_once()
+    assert result == {"id": "sell-ord-1", "status": "new"}
+
+
+def test_place_market_sell_uses_sell_side_and_day_tif():
+    from alpaca.trading.enums import OrderSide, TimeInForce
+    mock_tc = MagicMock()
+    mock_result = MagicMock()
+    mock_result.id = "sell-ord-2"
+    mock_result.status = "new"
+    mock_tc.submit_order.return_value = mock_result
+    client = make_client(mock_tc)
+    client.place_market_sell("TSLA", 5)
+    req = mock_tc.submit_order.call_args[0][0]
+    assert req.symbol == "TSLA"
+    assert req.qty == 5
+    assert req.side == OrderSide.SELL
+    assert req.time_in_force == TimeInForce.DAY
