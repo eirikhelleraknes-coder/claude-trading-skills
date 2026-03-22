@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,13 @@ alpaca = AlpacaClient(
 )
 rule_store = RuleStore()  # defaults to learning/learned_rules.json
 multiplier_store = MultiplierStore()  # uses learning/seed_multipliers.json + learning/learned_multipliers.json
+from learning.time_of_day_tracker import TimeOfDayTracker
+from learning.stop_distance_store import StopDistanceStore
+from learning.experiment_tracker import ExperimentTracker
+
+time_of_day_tracker = TimeOfDayTracker()
+stop_distance_store = StopDistanceStore()
+experiment_tracker = ExperimentTracker(is_paper=ALPACA_PAPER)
 pdt_tracker = PDTTracker()
 drawdown_tracker = DrawdownTracker()
 earnings_blackout = EarningsBlackout(cache_dir=CACHE_DIR)
@@ -57,6 +64,9 @@ pattern_extractor = PatternExtractor(
     rule_store=rule_store,
     cache_dir=CACHE_DIR,
     multiplier_store=multiplier_store,
+    time_of_day_tracker=time_of_day_tracker,
+    stop_distance_store=stop_distance_store,
+    experiment_tracker=experiment_tracker,
 )
 _scheduler = None
 
@@ -172,6 +182,66 @@ async def dashboard(request: Request):
         **_build_signals_context(),
     }
     return templates.TemplateResponse("dashboard.html", ctx)
+
+
+@app.get("/stats", response_class=HTMLResponse)
+async def stats_page(request: Request):
+    ctx = {
+        "request": request,
+        "settings": settings_manager.load(),
+        "multiplier_stats": multiplier_store._load_learned(),
+        "time_of_day": time_of_day_tracker.get_stats(),
+        "experiments": experiment_tracker.get_stats(),
+        "pdt_slots": pdt_tracker.slots_remaining(date.today()),
+    }
+    return templates.TemplateResponse("stats.html", ctx)
+
+
+@app.get("/trades", response_class=HTMLResponse)
+async def trades_page(request: Request):
+    trades_file = CACHE_DIR / "auto_trades.json"
+    trades = []
+    try:
+        if trades_file.exists():
+            data = json.loads(trades_file.read_text())
+            trades = data.get("trades", [])
+    except Exception:
+        trades = []
+
+    # Newest first
+    trades = list(reversed(trades))
+
+    # Pre-compute R for each trade (Jinja2 can't call .get() on dicts)
+    for t in trades:
+        try:
+            risk = t["entry_price"] - t["stop_price"]
+            if risk > 0 and t.get("exit_price"):
+                t["r"] = round((t["exit_price"] - t["entry_price"]) / risk, 2)
+            else:
+                t["r"] = None
+        except Exception:
+            t["r"] = None
+
+    # Compute summary stats
+    closed = [t for t in trades if t.get("outcome") in ("win", "loss")]
+    open_trades = [t for t in trades if not t.get("outcome")]
+    wins = [t for t in closed if t.get("outcome") == "win"]
+    win_rate = round(len(wins) / len(closed) * 100, 1) if closed else None
+
+    r_values = [t["r"] for t in closed if t.get("r") is not None]
+    avg_r = round(sum(r_values) / len(r_values), 2) if r_values else None
+
+    ctx = {
+        "request": request,
+        "market_state": _market_state(),
+        "settings": settings_manager.load(),
+        "trades": trades,
+        "total_trades": len(trades),
+        "open_count": len(open_trades),
+        "win_rate": win_rate,
+        "avg_r": avg_r,
+    }
+    return templates.TemplateResponse("trades.html", ctx)
 
 
 @app.get("/api/signals", response_class=HTMLResponse)

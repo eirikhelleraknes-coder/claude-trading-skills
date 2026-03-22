@@ -374,3 +374,17 @@ def test_tier2_defaults_present_without_settings_file():
     assert s.get("avoid_open_close_minutes") == 30
     assert s.get("breadth_threshold_pct") == 60.0
     assert s.get("breadth_size_reduction_pct") == 50.0
+
+
+def test_stats_route_returns_200():
+    """GET /stats returns 200."""
+    client = make_client()
+    response = client.get("/stats")
+    assert response.status_code == 200
+
+
+def test_trades_route_returns_200():
+    """GET /trades returns 200."""
+    client = make_client()
+    response = client.get("/trades")
+    assert response.status_code == 200

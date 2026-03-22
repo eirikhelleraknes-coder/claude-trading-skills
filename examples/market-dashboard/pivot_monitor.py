@@ -287,15 +287,15 @@ class PivotWatchlistMonitor:
         try:
             entry_price = self._alpaca.get_last_price(symbol)
             stop_price = round(entry_price * 0.97, 2)
-            qty = self._calc_qty(entry_price, stop_price, high_conviction=(tag == "HIGH_CONVICTION"))
+            regime = self._get_current_regime()
+            bucket_key = f"vcp+{tag}+{regime}"
+            qty = self._calc_qty(entry_price, stop_price, high_conviction=(tag == "HIGH_CONVICTION"), bucket_key=bucket_key)
             if qty <= 0:
                 print(f"[pivot_monitor] {symbol}: qty=0, skipping", file=sys.stderr)
                 return
 
-            regime = self._get_current_regime()
             multiplier = 2.0
             if self._multiplier_store is not None:
-                bucket_key = f"vcp+{tag}+{regime}"
                 multiplier = self._multiplier_store.get(bucket_key)
             take_profit_price = round(entry_price + (entry_price - stop_price) * multiplier, 2)
 
@@ -316,8 +316,14 @@ class PivotWatchlistMonitor:
         except Exception as e:
             print(f"[pivot_monitor] {symbol} log error (order placed): {e}", file=sys.stderr)
 
-    def _calc_qty(self, entry_price: float, stop_price: float, high_conviction: bool) -> int:
-        """Calculate share count based on risk % settings and account value."""
+    def _calc_qty(
+        self,
+        entry_price: float,
+        stop_price: float,
+        high_conviction: bool,
+        bucket_key: str = "",
+    ) -> int:
+        """Calculate share count based on risk % settings, Kelly, and VIX."""
         settings = self._settings.load()
         risk_pct = settings.get("default_risk_pct", 1.0)
         if high_conviction:
@@ -340,9 +346,19 @@ class PivotWatchlistMonitor:
 
         max_dollar = portfolio_value * (max_pos_pct / 100)
         max_qty_by_size = int(max_dollar / entry_price)
-        raw_qty = min(qty, max_qty_by_size)
-        breadth_mult = self._get_breadth_multiplier()
-        return max(1, int(raw_qty * breadth_mult))
+
+        # Apply Kelly multiplier (opt-in — needs accumulated trade history)
+        kelly_mult = 1.0
+        if settings.get("kelly_sizing_enabled", False) and self._multiplier_store is not None:
+            kelly_max = settings.get("kelly_max_multiplier", 2.0)
+            kelly_mult = self._multiplier_store.get_kelly_multiplier(bucket_key, risk_pct, kelly_max)
+
+        # Apply VIX multiplier (automatic — reads from cache, fails open)
+        vix_mult = self._get_vix_multiplier()
+
+        regime_conf_mult = self._get_regime_confidence_multiplier()
+        final_qty = max(1, int(qty * kelly_mult * vix_mult))
+        return min(max(1, int(final_qty * regime_conf_mult)), max_qty_by_size)
 
     def _log_trade(
         self, candidate: dict, order_id: str,
@@ -523,6 +539,57 @@ class PivotWatchlistMonitor:
         except Exception as e:
             print(f"[time_stop] {trade['symbol']} exit failed: {e}", file=sys.stderr)
         return False
+
+    def _get_vix_multiplier(self) -> float:
+        """Returns size multiplier based on VIX. Lower VIX = full size. Fails open (1.0)."""
+        settings = self._settings.load()
+        if not settings.get("vix_sizing_enabled", True):
+            return 1.0
+        try:
+            for fname in ["us-market-bubble-detector.json", "macro-regime-detector.json"]:
+                fpath = self._cache_dir / fname
+                if fpath.exists():
+                    data = json.loads(fpath.read_text())
+                    vix = (
+                        data.get("vix")
+                        or data.get("VIX")
+                        or (data.get("indicators") or {}).get("vix")
+                    )
+                    if vix is not None:
+                        vix = float(vix)
+                        if vix < 20:
+                            return 1.0
+                        elif vix < 25:
+                            return 0.75
+                        elif vix < 30:
+                            return 0.50
+                        else:
+                            return 0.25
+        except Exception:
+            pass
+        return 1.0  # fail open — no VIX data = no penalty
+
+    def _get_regime_confidence_multiplier(self) -> float:
+        """Returns size multiplier based on regime signal confidence (0-100 score)."""
+        try:
+            data = json.loads((self._cache_dir / "macro-regime-detector.json").read_text())
+            regime_data = data.get("regime", {})
+            score = None
+            if isinstance(regime_data, dict):
+                score = regime_data.get("score")
+            if score is None:
+                return 1.0
+            score = float(score)
+            if score >= 75:
+                return 1.0
+            elif score >= 50:
+                return 0.75
+            elif score >= 25:
+                return 0.5
+            else:
+                return 0.25
+        except Exception:
+            return 1.0
 
     def _get_breadth_multiplier(self) -> float:
         """Returns size multiplier based on market breadth. 1.0 = full size."""

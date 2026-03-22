@@ -992,6 +992,196 @@ def test_time_stop_skips_when_entry_time_missing():
         monitor._alpaca.place_market_sell.assert_not_called()
 
 
+# ── VIX multiplier helpers ────────────────────────────────────────────────────
+
+def write_bubble_cache(tmp_path, vix: float):
+    data = {"vix": vix, "risk_score": 30}
+    (tmp_path / "us-market-bubble-detector.json").write_text(json.dumps(data))
+
+
+def make_vix_monitor(tmp_path, settings_overrides=None):
+    """Build a PivotWatchlistMonitor with a fake cache dir for VIX tests."""
+    from unittest.mock import MagicMock
+    from pivot_monitor import PivotWatchlistMonitor
+    from settings_manager import SettingsManager
+
+    settings = MagicMock(spec=SettingsManager)
+    base = {"vix_sizing_enabled": True, "kelly_sizing_enabled": False}
+    if settings_overrides:
+        base.update(settings_overrides)
+    settings.load.return_value = base
+
+    alpaca = MagicMock()
+    monitor = PivotWatchlistMonitor(
+        alpaca_client=alpaca,
+        settings_manager=settings,
+        cache_dir=tmp_path,
+    )
+    return monitor
+
+
+def test_vix_below_20_returns_1_0(tmp_path):
+    write_bubble_cache(tmp_path, vix=15.0)
+    monitor = make_vix_monitor(tmp_path)
+    assert monitor._get_vix_multiplier() == 1.0
+
+
+def test_vix_between_20_and_25_returns_0_75(tmp_path):
+    write_bubble_cache(tmp_path, vix=22.5)
+    monitor = make_vix_monitor(tmp_path)
+    assert monitor._get_vix_multiplier() == 0.75
+
+
+def test_vix_between_25_and_30_returns_0_50(tmp_path):
+    write_bubble_cache(tmp_path, vix=27.0)
+    monitor = make_vix_monitor(tmp_path)
+    assert monitor._get_vix_multiplier() == 0.50
+
+
+def test_vix_above_30_returns_0_25(tmp_path):
+    write_bubble_cache(tmp_path, vix=35.0)
+    monitor = make_vix_monitor(tmp_path)
+    assert monitor._get_vix_multiplier() == 0.25
+
+
+def test_vix_cache_missing_fails_open(tmp_path):
+    """No cache file → return 1.0, never block trading."""
+    monitor = make_vix_monitor(tmp_path)
+    assert monitor._get_vix_multiplier() == 1.0
+
+
+def test_vix_disabled_returns_1_0(tmp_path):
+    write_bubble_cache(tmp_path, vix=40.0)
+    monitor = make_vix_monitor(tmp_path, settings_overrides={"vix_sizing_enabled": False})
+    assert monitor._get_vix_multiplier() == 1.0
+
+
+# ── _calc_qty sizing multiplier tests ─────────────────────────────────────────
+
+def make_monitor_with_account(tmp_path, portfolio_value: float, settings_overrides=None):
+    """Monitor with a mock Alpaca that returns a fixed portfolio value."""
+    from unittest.mock import MagicMock
+    from pivot_monitor import PivotWatchlistMonitor
+    from settings_manager import SettingsManager
+
+    alpaca = MagicMock()
+    alpaca.get_account.return_value = {"portfolio_value": portfolio_value}
+    alpaca.get_positions.return_value = []
+
+    settings = MagicMock(spec=SettingsManager)
+    base = {
+        "default_risk_pct": 1.0,
+        "max_position_size_pct": 50.0,  # large enough that size cap doesn't interfere with tests
+        "kelly_sizing_enabled": False,
+        "kelly_max_multiplier": 2.0,
+        "vix_sizing_enabled": False,  # disable VIX by default so tests are isolated
+    }
+    if settings_overrides:
+        base.update(settings_overrides)
+    settings.load.return_value = base
+
+    monitor = PivotWatchlistMonitor(
+        alpaca_client=alpaca,
+        settings_manager=settings,
+        cache_dir=tmp_path,
+    )
+    return monitor
+
+
+def test_calc_qty_kelly_disabled_no_multiplier(tmp_path):
+    """Kelly disabled → qty unchanged from base calculation."""
+    monitor = make_monitor_with_account(tmp_path, portfolio_value=100_000)
+    qty = monitor._calc_qty(
+        entry_price=100.0, stop_price=97.0, high_conviction=False, bucket_key="vcp+CLEAR+bull"
+    )
+    # base: risk $1000 / $3 risk-per-share = 333 shares
+    assert qty == 333
+
+
+def test_calc_qty_kelly_enabled_high_win_rate_increases_qty(tmp_path):
+    """Kelly enabled with a high-win-rate bucket → qty larger than base."""
+    from unittest.mock import MagicMock, patch
+    monitor = make_monitor_with_account(
+        tmp_path, portfolio_value=100_000,
+        settings_overrides={"kelly_sizing_enabled": True, "kelly_max_multiplier": 2.0},
+    )
+    # Inject a mock multiplier_store that returns kelly mult of 1.8
+    mock_store = MagicMock()
+    mock_store.get_kelly_multiplier.return_value = 1.8
+    monitor._multiplier_store = mock_store
+
+    base_qty = 333  # from 1% risk on $100k with $3 risk/share
+    qty = monitor._calc_qty(
+        entry_price=100.0, stop_price=97.0, high_conviction=False, bucket_key="vcp+CLEAR+bull"
+    )
+    assert qty > base_qty
+
+
+def test_calc_qty_high_vix_reduces_qty(tmp_path):
+    """VIX > 30 → qty reduced to 25% of base."""
+    write_bubble_cache(tmp_path, vix=35.0)
+    monitor = make_monitor_with_account(
+        tmp_path, portfolio_value=100_000,
+        settings_overrides={"vix_sizing_enabled": True},
+    )
+    qty = monitor._calc_qty(
+        entry_price=100.0, stop_price=97.0, high_conviction=False, bucket_key="vcp+CLEAR+bull"
+    )
+    # base 333 × 0.25 = 83 (int floor, min 1)
+    assert qty == max(1, int(333 * 0.25))
+
+
+def test_calc_qty_kelly_and_vix_stack(tmp_path):
+    """Kelly mult 1.5 × VIX mult 0.5 = net 0.75 → qty reduced from base."""
+    write_bubble_cache(tmp_path, vix=27.0)  # VIX 0.50
+    monitor = make_monitor_with_account(
+        tmp_path, portfolio_value=100_000,
+        settings_overrides={"kelly_sizing_enabled": True, "vix_sizing_enabled": True},
+    )
+    mock_store = MagicMock()
+    mock_store.get_kelly_multiplier.return_value = 1.5
+    monitor._multiplier_store = mock_store
+
+    qty = monitor._calc_qty(
+        entry_price=100.0, stop_price=97.0, high_conviction=False, bucket_key="vcp+CLEAR+bull"
+    )
+    expected = max(1, int(333 * 1.5 * 0.50))
+    assert qty == expected
+
+
+# ── Regime confidence multiplier tests ───────────────────────────────────────
+
+def _write_regime_cache(tmp_path, score: float):
+    import json
+    (tmp_path / "macro-regime-detector.json").write_text(json.dumps({
+        "regime": {"current_regime": "bull", "score": score}
+    }))
+
+
+def test_regime_confidence_score_75_returns_1_0(tmp_path):
+    _write_regime_cache(tmp_path, 80.0)
+    monitor = make_vix_monitor(tmp_path)
+    assert monitor._get_regime_confidence_multiplier() == 1.0
+
+
+def test_regime_confidence_score_50_to_75_returns_0_75(tmp_path):
+    _write_regime_cache(tmp_path, 60.0)
+    monitor = make_vix_monitor(tmp_path)
+    assert monitor._get_regime_confidence_multiplier() == 0.75
+
+
+def test_regime_confidence_score_below_25_returns_0_25(tmp_path):
+    _write_regime_cache(tmp_path, 10.0)
+    monitor = make_vix_monitor(tmp_path)
+    assert monitor._get_regime_confidence_multiplier() == 0.25
+
+
+def test_regime_confidence_missing_cache_returns_1_0(tmp_path):
+    monitor = make_vix_monitor(tmp_path)
+    # No cache file written
+    assert monitor._get_regime_confidence_multiplier() == 1.0
+
+
 # ── Task 6: Scheduler smoke test ─────────────────────────────────────────────
 
 def test_create_scheduler_registers_exit_management_job():

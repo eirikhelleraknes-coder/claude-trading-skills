@@ -32,6 +32,9 @@ _DEFAULTS = {
     "partial_exit_at_r": 1.0,
     "partial_exit_pct": 50,
     "time_stop_days": 5,
+    "kelly_sizing_enabled": False,   # opt-in: needs real trade history first
+    "kelly_max_multiplier": 2.0,     # max Kelly can multiply base risk by
+    "vix_sizing_enabled": True,      # automatic: reads from cache
 }
 
 
