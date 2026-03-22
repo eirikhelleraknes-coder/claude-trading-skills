@@ -346,6 +346,11 @@ async def post_settings(
     avoid_open_close_minutes: int = Form(30),
     breadth_threshold_pct: float = Form(60.0),
     breadth_size_reduction_pct: float = Form(50.0),
+    trailing_stop_enabled: str = Form("true"),
+    partial_exit_enabled: str = Form("true"),
+    partial_exit_at_r: float = Form(1.0),
+    partial_exit_pct: int = Form(50),
+    time_stop_days: int = Form(5),
 ):
     if environment == "live" and live_confirm != "CONFIRM LIVE TRADING":
         raise HTTPException(
@@ -365,6 +370,11 @@ async def post_settings(
         "avoid_open_close_minutes": avoid_open_close_minutes,
         "breadth_threshold_pct": breadth_threshold_pct,
         "breadth_size_reduction_pct": breadth_size_reduction_pct,
+        "trailing_stop_enabled": trailing_stop_enabled == "true",
+        "partial_exit_enabled": partial_exit_enabled == "true",
+        "partial_exit_at_r": partial_exit_at_r,
+        "partial_exit_pct": partial_exit_pct,
+        "time_stop_days": time_stop_days,
     })
     ctx = {"request": request, "settings": settings_manager.load()}
     return templates.TemplateResponse("fragments/settings_modal.html", ctx)

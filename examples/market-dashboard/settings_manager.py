@@ -27,6 +27,11 @@ _DEFAULTS = {
     "avoid_open_close_minutes": 30,
     "breadth_threshold_pct": 60.0,
     "breadth_size_reduction_pct": 50.0,
+    "trailing_stop_enabled": True,
+    "partial_exit_enabled": True,
+    "partial_exit_at_r": 1.0,
+    "partial_exit_pct": 50,
+    "time_stop_days": 5,
 }
 
 

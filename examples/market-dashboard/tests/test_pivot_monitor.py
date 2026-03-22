@@ -990,3 +990,16 @@ def test_time_stop_skips_when_entry_time_missing():
         result = monitor._apply_time_stop(trade, {"time_stop_days": 5})
         assert result is False
         monitor._alpaca.place_market_sell.assert_not_called()
+
+
+# ── Task 6: Scheduler smoke test ─────────────────────────────────────────────
+
+def test_create_scheduler_registers_exit_management_job():
+    with tempfile.TemporaryDirectory() as d:
+        from scheduler import create_scheduler
+        from unittest.mock import MagicMock
+        runner = MagicMock()
+        monitor = make_monitor(Path(d))
+        sched = create_scheduler(runner=runner, cache_dir=Path(d), pivot_monitor=monitor)
+        job_ids = {job.id for job in sched.get_jobs()}
+        assert "exit_management" in job_ids

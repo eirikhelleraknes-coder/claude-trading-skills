@@ -90,6 +90,35 @@
                value="{{ settings.get('breadth_size_reduction_pct', 50.0) if settings is mapping else settings.breadth_size_reduction_pct }}" min="0" max="100" step="5">
       </div>
 
+      <!-- Exit Management (Tier 3) -->
+      <div style="margin-top:14px; margin-bottom:6px; font-size:11px; color:#8b949e; text-transform:uppercase;">Exit Management</div>
+      <div class="form-row">
+        <div class="form-label">Trailing Stop</div>
+        <select name="trailing_stop_enabled" class="form-input">
+          <option value="true" {% if settings.trailing_stop_enabled %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not settings.trailing_stop_enabled %}selected{% endif %}>Disabled</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-label">Partial Exit</div>
+        <select name="partial_exit_enabled" class="form-input">
+          <option value="true" {% if settings.partial_exit_enabled %}selected{% endif %}>Enabled</option>
+          <option value="false" {% if not settings.partial_exit_enabled %}selected{% endif %}>Disabled</option>
+        </select>
+      </div>
+      <div class="form-row">
+        <div class="form-label">Partial Exit at R</div>
+        <input type="number" name="partial_exit_at_r" class="form-input" value="{{ settings.partial_exit_at_r }}" min="0.5" max="3.0" step="0.25">
+      </div>
+      <div class="form-row">
+        <div class="form-label">Partial Exit Size (%)</div>
+        <input type="number" name="partial_exit_pct" class="form-input" value="{{ settings.partial_exit_pct }}" min="10" max="90" step="5">
+      </div>
+      <div class="form-row">
+        <div class="form-label">Time Stop (days, 0=off)</div>
+        <input type="number" name="time_stop_days" class="form-input" value="{{ settings.time_stop_days }}" min="0" max="30">
+      </div>
+
       <div style="display:flex; gap:8px; margin-top:16px;">
         <button type="submit" class="btn-primary">Save</button>
         <button type="button" class="btn-secondary" onclick="document.getElementById('modal-container').innerHTML=''">Cancel</button>
