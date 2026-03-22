@@ -810,3 +810,64 @@ def test_check_exit_management_does_not_write_file_when_unchanged():
             pm._market_is_open_now = original
         mtime_after = os.path.getmtime(str(tmp / "auto_trades.json"))
         assert mtime_before == mtime_after
+
+
+# ── Task 3: Trailing stop tests ───────────────────────────────────────────────
+
+def make_trailing_trade(entry=100.0, stop=97.0, stop_order_id="stop-ord-1"):
+    return {"symbol": "AAPL", "entry_price": entry, "stop_price": stop, "stop_order_id": stop_order_id, "qty": 10, "outcome": None, "entry_time": "2026-03-20T14:00:00+00:00"}
+
+
+def test_trailing_stop_moves_to_breakeven_at_1r():
+    with tempfile.TemporaryDirectory() as d:
+        monitor = make_monitor(Path(d))
+        monitor._alpaca.get_last_price.return_value = 103.0
+        monitor._alpaca.replace_order_stop.return_value = {"id": "stop-ord-1", "status": "accepted"}
+        trade = make_trailing_trade()
+        result = monitor._apply_trailing_stop(trade, {"trailing_stop_enabled": True})
+        assert result is True
+        assert trade["stop_price"] == 100.0
+        monitor._alpaca.replace_order_stop.assert_called_once_with("stop-ord-1", 100.0)
+
+
+def test_trailing_stop_moves_to_1r_profit_at_2r():
+    with tempfile.TemporaryDirectory() as d:
+        monitor = make_monitor(Path(d))
+        monitor._alpaca.get_last_price.return_value = 106.0
+        monitor._alpaca.replace_order_stop.return_value = {"id": "stop-ord-1", "status": "accepted"}
+        trade = make_trailing_trade()
+        result = monitor._apply_trailing_stop(trade, {"trailing_stop_enabled": True})
+        assert result is True
+        assert trade["stop_price"] == 103.0
+        monitor._alpaca.replace_order_stop.assert_called_once_with("stop-ord-1", 103.0)
+
+
+def test_trailing_stop_no_change_below_1r():
+    with tempfile.TemporaryDirectory() as d:
+        monitor = make_monitor(Path(d))
+        monitor._alpaca.get_last_price.return_value = 102.5
+        trade = make_trailing_trade()
+        result = monitor._apply_trailing_stop(trade, {"trailing_stop_enabled": True})
+        assert result is False
+        assert trade["stop_price"] == 97.0
+        monitor._alpaca.replace_order_stop.assert_not_called()
+
+
+def test_trailing_stop_no_change_when_already_at_breakeven():
+    with tempfile.TemporaryDirectory() as d:
+        monitor = make_monitor(Path(d))
+        monitor._alpaca.get_last_price.return_value = 103.0
+        trade = make_trailing_trade(stop=100.0)
+        result = monitor._apply_trailing_stop(trade, {"trailing_stop_enabled": True})
+        assert result is False
+        monitor._alpaca.replace_order_stop.assert_not_called()
+
+
+def test_trailing_stop_disabled_by_setting():
+    with tempfile.TemporaryDirectory() as d:
+        monitor = make_monitor(Path(d))
+        monitor._alpaca.get_last_price.return_value = 110.0
+        trade = make_trailing_trade()
+        result = monitor._apply_trailing_stop(trade, {"trailing_stop_enabled": False})
+        assert result is False
+        monitor._alpaca.replace_order_stop.assert_not_called()

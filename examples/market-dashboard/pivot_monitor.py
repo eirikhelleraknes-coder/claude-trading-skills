@@ -424,7 +424,35 @@ class PivotWatchlistMonitor:
             trades_file.write_text(json.dumps(data, indent=2))
 
     def _apply_trailing_stop(self, trade: dict, settings: dict) -> bool:
-        return False  # stub
+        if not settings.get("trailing_stop_enabled", True):
+            return False
+        entry = trade.get("entry_price")
+        stop = trade.get("stop_price")
+        stop_order_id = trade.get("stop_order_id")
+        if not all([entry, stop, stop_order_id]):
+            return False
+        try:
+            current_price = self._alpaca.get_last_price(trade["symbol"])
+        except Exception:
+            return False
+        risk = entry - stop
+        if risk <= 0:
+            return False
+        current_r = (current_price - entry) / risk
+        new_stop = None
+        if current_r >= 2.0 and stop < entry + risk:
+            new_stop = round(entry + risk, 2)
+        elif current_r >= 1.0 and stop < entry:
+            new_stop = entry
+        if new_stop is not None and new_stop > stop:
+            try:
+                self._alpaca.replace_order_stop(stop_order_id, new_stop)
+                trade["stop_price"] = new_stop
+                trade["trailing_stop_level"] = new_stop
+                return True
+            except Exception as e:
+                print(f"[trailing_stop] {trade['symbol']} replace failed: {e}", file=sys.stderr)
+        return False
 
     def _apply_partial_exit(self, trade: dict, settings: dict) -> bool:
         return False  # stub
