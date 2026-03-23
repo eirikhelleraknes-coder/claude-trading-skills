@@ -47,6 +47,15 @@
 
 <!-- Bottom strip -->
 <div class="bottom-strip {% if market_state == 'pre_market' %}pre-market{% else %}market-hours{% endif %}">
+  <!-- Portfolio: always visible -->
+  <div class="bottom-panel" id="portfolio-panel"
+       hx-get="/api/portfolio"
+       hx-trigger="every 30s, load"
+       hx-swap="innerHTML">
+    <div class="panel-title">Portfolio (Alpaca)</div>
+    <div style="color:#8b949e; font-size:11px;">Loading…</div>
+  </div>
+
   {% if market_state == 'pre_market' %}
     <!-- Pre-Market: news brief + schedule -->
     <div class="bottom-panel">
@@ -60,14 +69,7 @@
       <a href="/detail/earnings_cal" style="color:#38bdf8; font-size:11px;">→ Earnings</a>
     </div>
   {% else %}
-    <!-- Market Hours: portfolio + themes + events -->
-    <div class="bottom-panel" id="portfolio-panel"
-         hx-get="/api/portfolio"
-         hx-trigger="every 5s, load"
-         hx-swap="innerHTML">
-      <div class="panel-title">Portfolio (Alpaca)</div>
-      <div style="color:#8b949e; font-size:11px;">Loading…</div>
-    </div>
+    <!-- Market Hours: themes + events -->
     <div class="bottom-panel">
       <div class="panel-title">Top Themes</div>
       <a href="/detail/themes" style="color:#38bdf8; font-size:11px;">→ Theme Detector</a>
