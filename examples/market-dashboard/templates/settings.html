@@ -9,7 +9,7 @@
   </div>
   {% endif %}
 
-  <form method="post" action="/api/settings" onsubmit="return handleSettingsSubmit(this)">
+  <form method="post" action="/api/settings" onsubmit="return handleSettingsSubmit(this)" data-saved-env="{{ settings.environment }}">
     <input type="hidden" name="live_confirm" id="live-confirm-input" value="">
 
     <!-- Section 1: Mode -->
@@ -174,13 +174,17 @@ function handleSettingsSubmit(form) {
     if (!ok) return false;
   }
 
-  if (env === 'live') {
+  var savedEnv = form.getAttribute('data-saved-env');
+  if (env === 'live' && savedEnv !== 'live') {
     var typed = prompt('Type exactly to confirm:\n\nCONFIRM LIVE TRADING');
     if (typed !== 'CONFIRM LIVE TRADING') {
       alert('Confirmation did not match. Live trading not enabled.');
       return false;
     }
     document.getElementById('live-confirm-input').value = typed;
+  } else if (env === 'live' && savedEnv === 'live') {
+    // Already in live mode — pass confirmation automatically
+    document.getElementById('live-confirm-input').value = 'CONFIRM LIVE TRADING';
   }
   return true;
 }
