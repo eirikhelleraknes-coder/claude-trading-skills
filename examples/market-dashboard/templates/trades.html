@@ -40,6 +40,7 @@
       <thead>
         <tr style="color:#94a3b8; border-bottom:1px solid #334155;">
           <th style="padding:6px; text-align:left;">Time</th>
+          <th style="padding:6px; text-align:left;">Market</th>
           <th style="padding:6px; text-align:left;">Symbol</th>
           <th style="padding:6px; text-align:left;">Screener</th>
           <th style="padding:6px; text-align:left;">Tag</th>
@@ -56,6 +57,9 @@
         <tr style="border-bottom:1px solid #1e293b;">
           <td style="padding:6px; color:#94a3b8;">
             {{ t.entry_time[:16] | replace("T", " ") if t.entry_time else "—" }}
+          </td>
+          <td style="padding:6px; color:#94a3b8; font-size:11px;">
+            {{ t.market | default("us") | upper }}
           </td>
           <td style="padding:6px; font-weight:600;">{{ t.symbol }}</td>
           <td style="padding:6px; color:#94a3b8;">{{ t.screener | default("—") }}</td>
@@ -86,7 +90,7 @@
         </tr>
         {% else %}
         <tr>
-          <td colspan="10" style="padding:12px; color:#64748b; text-align:center;">
+          <td colspan="11" style="padding:12px; color:#64748b; text-align:center;">
             No trades recorded yet.
           </td>
         </tr>
