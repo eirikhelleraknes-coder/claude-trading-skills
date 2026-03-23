@@ -255,7 +255,7 @@ async def dashboard(request: Request):
         "settings": settings_manager.load(),
         **_build_signals_context(),
     }
-    return templates.TemplateResponse("dashboard.html", ctx)
+    return templates.TemplateResponse(request, "dashboard.html", ctx)
 
 
 @app.get("/stats", response_class=HTMLResponse)
@@ -268,7 +268,7 @@ async def stats_page(request: Request):
         "experiments": experiment_tracker.get_stats(),
         "pdt_slots": pdt_tracker.slots_remaining(date.today()),
     }
-    return templates.TemplateResponse("stats.html", ctx)
+    return templates.TemplateResponse(request, "stats.html", ctx)
 
 
 @app.get("/trades", response_class=HTMLResponse)
@@ -326,13 +326,13 @@ async def trades_page(request: Request):
         "win_rate": win_rate,
         "avg_r": avg_r,
     }
-    return templates.TemplateResponse("trades.html", ctx)
+    return templates.TemplateResponse(request, "trades.html", ctx)
 
 
 @app.get("/api/signals", response_class=HTMLResponse)
 async def api_signals(request: Request):
     ctx = {"request": request, **_build_signals_context()}
-    return templates.TemplateResponse("fragments/signals.html", ctx)
+    return templates.TemplateResponse(request, "fragments/signals.html", ctx)
 
 
 @app.get("/api/market-state")
@@ -396,7 +396,7 @@ async def order_preview(
         "multiplier": mult,
         "multiplier_source": multiplier_source,
     }
-    return templates.TemplateResponse("fragments/order_preview.html", ctx)
+    return templates.TemplateResponse(request, "fragments/order_preview.html", ctx)
 
 
 class OrderConfirmRequest(BaseModel):
@@ -445,7 +445,7 @@ async def api_portfolio(request: Request):
         except Exception as e:
             portfolio["error"] = str(e)
     ctx = {"request": request, "portfolio": portfolio, "settings": settings_manager.load()}
-    return templates.TemplateResponse("fragments/portfolio.html", ctx)
+    return templates.TemplateResponse(request, "fragments/portfolio.html", ctx)
 
 
 @app.get("/api/monitor/status")
@@ -488,7 +488,7 @@ async def detail(request: Request, page: str):
         "stale": stale,
         "settings": settings_manager.load(),
     }
-    return templates.TemplateResponse(f"detail/{page}.html", ctx)
+    return templates.TemplateResponse(request, f"detail/{page}.html", ctx)
 
 
 @app.get("/settings", response_class=HTMLResponse)
@@ -498,7 +498,7 @@ async def settings_page(request: Request):
         "market_state": _market_state(),
         "settings": settings_manager.load(),
     }
-    return templates.TemplateResponse("settings.html", ctx)
+    return templates.TemplateResponse(request, "settings.html", ctx)
 
 
 @app.post("/api/settings")
