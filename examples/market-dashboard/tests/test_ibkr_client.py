@@ -140,5 +140,5 @@ def test_subscribe_bars_creates_realtime_bars():
         except asyncio.CancelledError:
             pass
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())
     assert mock_ib.reqRealTimeBars.call_count == 2

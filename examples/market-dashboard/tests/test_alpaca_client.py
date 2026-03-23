@@ -244,7 +244,7 @@ def test_subscribe_bars_calls_stream_subscribe_and_run():
         with patch("alpaca_client.StockDataStream", return_value=mock_stream):
             await client.subscribe_bars(["AAPL", "MSFT"], callback)
 
-    asyncio.get_event_loop().run_until_complete(run())
+    asyncio.run(run())
 
     mock_stream.subscribe_bars.assert_called_once()
     mock_stream.run.assert_called_once()
