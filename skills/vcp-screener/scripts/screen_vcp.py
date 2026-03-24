@@ -508,24 +508,13 @@ def main():
         universe_desc = f"Custom ({len(symbols)} stocks)"
         print(f"  Using custom universe: {len(symbols)} stocks")
     else:
-        print("  Fetching S&P 500 constituents...", end=" ", flush=True)
-        constituents = client.get_sp500_constituents()
-        if not constituents:
-            print("FAILED")
-            print("ERROR: Unable to fetch S&P 500 constituents", file=sys.stderr)
-            sys.exit(1)
-        symbols = [c["symbol"] for c in constituents]
-        universe_desc = f"S&P 500 ({len(symbols)} stocks)"
-        print(f"OK ({len(symbols)} stocks)")
+        print("ERROR: No --universe provided and S&P 500 fetch is not supported with Alpaca.", file=sys.stderr)
+        print("ERROR: Pass symbols via --universe or ensure vcp-universe.json exists in cache.", file=sys.stderr)
+        sys.exit(1)
 
     # Build sector/name lookup
     sector_map = {}
     name_map = {}
-    if not args.universe and constituents:
-        for c in constituents:
-            sector_map[c["symbol"]] = c.get("sector", "Unknown")
-            name_map[c["symbol"]] = c.get("name", c["symbol"])
-
     # Batch fetch quotes
     print("  Fetching quotes...", end=" ", flush=True)
     all_quotes = client.get_batch_quotes(symbols)

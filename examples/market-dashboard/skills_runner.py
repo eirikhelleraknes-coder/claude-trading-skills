@@ -48,7 +48,7 @@ class SkillsRunner:
                     if symbols:
                         args += ["--universe"] + symbols
                 except Exception:
-                    pass  # fall back to full S&P 500 scan
+                    pass  # no universe file — screener will exit with a clear error message
 
         return [sys.executable, str(script)] + args
 
