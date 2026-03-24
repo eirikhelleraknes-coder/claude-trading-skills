@@ -143,3 +143,37 @@ def test_missing_api_keys_raises():
         with patch("alpaca_data_client.StockHistoricalDataClient"):
             with pytest.raises(EnvironmentError):
                 AlpacaDataClient()
+
+
+def test_get_sp500_constituents_raises():
+    """get_sp500_constituents raises NotImplementedError."""
+    from alpaca_data_client import AlpacaDataClient
+
+    with patch("alpaca_data_client.StockHistoricalDataClient"), \
+         patch.dict(os.environ, _FAKE_ENV):
+        client = AlpacaDataClient()
+    with pytest.raises(NotImplementedError):
+        client.get_sp500_constituents()
+
+
+def test_get_historical_prices_empty_when_no_data():
+    """get_historical_prices returns empty historical list when Alpaca returns no bars."""
+    import pandas as pd
+    from alpaca_data_client import AlpacaDataClient
+
+    # Build an empty DataFrame with the expected MultiIndex structure
+    empty_df = pd.DataFrame(
+        columns=["open", "high", "low", "close", "volume"],
+    )
+    empty_df.index = pd.MultiIndex.from_tuples([], names=["symbol", "timestamp"])
+
+    mock_bars = MagicMock()
+    mock_bars.df = empty_df
+
+    with patch("alpaca_data_client.StockHistoricalDataClient") as MockClient, \
+         patch.dict(os.environ, _FAKE_ENV):
+        MockClient.return_value.get_stock_bars.return_value = mock_bars
+        client = AlpacaDataClient()
+        result = client.get_historical_prices("FAKE", days=30)
+
+    assert result is None or result["historical"] == []
