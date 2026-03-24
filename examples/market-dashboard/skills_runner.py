@@ -125,7 +125,7 @@ class SkillsRunner:
             return True
         try:
             data = json.loads(cache_file.read_text())
-            generated_at = data.get("generated_at")
+            generated_at = data.get("generated_at") or data.get("metadata", {}).get("generated_at")
             if not generated_at:
                 return True
             then = datetime.datetime.fromisoformat(generated_at)
