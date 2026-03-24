@@ -180,18 +180,25 @@ class UniverseBuilder:
             print(f"[universe_builder] FINVIZ scrape failed: {e}", file=sys.stderr)
             return []
 
-        if not rows:
+        if rows is None or (hasattr(rows, 'empty') and rows.empty):
             print("[universe_builder] FINVIZ returned 0 candidates", file=sys.stderr)
             return []
 
         symbols = []
-        for row in rows:
-            if isinstance(row, dict):
-                ticker = row.get("Ticker") or row.get("ticker")
-            else:
+        if hasattr(rows, 'itertuples'):
+            # DataFrame returned by finvizfinance
+            for row in rows.itertuples():
                 ticker = getattr(row, "Ticker", None)
-            if ticker:
-                symbols.append(str(ticker).upper())
+                if ticker:
+                    symbols.append(str(ticker).upper())
+        else:
+            for row in rows:
+                if isinstance(row, dict):
+                    ticker = row.get("Ticker") or row.get("ticker")
+                else:
+                    ticker = getattr(row, "Ticker", None)
+                if ticker:
+                    symbols.append(str(ticker).upper())
 
         candidates = []
         for symbol in symbols:
