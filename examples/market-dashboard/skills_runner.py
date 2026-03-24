@@ -19,6 +19,39 @@ class SkillsRunner:
         self.skills_root = skills_root
         self.cache_dir.mkdir(parents=True, exist_ok=True)
 
+    def build_command(self, skill_name: str) -> list:
+        """Build the subprocess command for a skill, expanding dynamic args.
+
+        For vcp-screener: passes --universe symbols from cache/vcp-universe.json when present.
+        Falls back to full S&P 500 scan when the file is missing.
+        """
+        cfg = SKILL_REGISTRY.get(skill_name)
+        if cfg is None or cfg.get("script") is None:
+            return []
+
+        script = self.skills_root / cfg["script"]
+        args = [
+            a.replace("{cache_dir}", str(self.cache_dir))
+            for a in cfg.get("args", [])
+        ]
+
+        # Expand universe file for VCP screener
+        if skill_name == "vcp-screener":
+            universe_file = self.cache_dir / "vcp-universe.json"
+            if universe_file.exists():
+                try:
+                    data = json.loads(universe_file.read_text())
+                    symbols = [
+                        s["symbol"] for s in data.get("symbols", [])
+                        if s.get("status") in ("active", "weakening")
+                    ]
+                    if symbols:
+                        args += ["--universe"] + symbols
+                except Exception:
+                    pass  # fall back to full S&P 500 scan
+
+        return [sys.executable, str(script)] + args
+
     def run_skill(self, skill_name: str) -> bool:
         """Run a skill subprocess and cache its JSON output. Returns True on success."""
         cfg = SKILL_REGISTRY.get(skill_name)
@@ -28,12 +61,9 @@ class SkillsRunner:
         if cfg.get("script") is None:
             return False  # SKILL.md-only skill, no standalone script
 
-        script = self.skills_root / cfg["script"]
-        args = [
-            a.replace("{cache_dir}", str(self.cache_dir))
-            for a in cfg.get("args", [])
-        ]
-        cmd = [sys.executable, str(script)] + args
+        cmd = self.build_command(skill_name)
+        if not cmd:
+            return False
         stdout_capture = cfg.get("stdout_capture", False)
 
         stderr_log = self.cache_dir / f"{skill_name}.stderr.log"

@@ -110,3 +110,36 @@ def test_is_stale_returns_false_for_fresh_file(tmp_path):
     cache.write_text(json.dumps({"generated_at": now}))
 
     assert runner.is_stale("ftd-detector") is False
+
+
+def test_vcp_screener_uses_universe_file_when_present(tmp_path):
+    """SkillsRunner passes --universe symbols to VCP screener when vcp-universe.json exists."""
+    from skills_runner import SkillsRunner
+
+    universe = {
+        "updated": "2026-03-23T18:00:00Z",
+        "symbols": [
+            {"symbol": "AAPL", "status": "active"},
+            {"symbol": "MSFT", "status": "active"},
+            {"symbol": "TSLA", "status": "weakening"},
+        ]
+    }
+    (tmp_path / "vcp-universe.json").write_text(json.dumps(universe))
+
+    runner = SkillsRunner(cache_dir=tmp_path, skills_root=Path("/fake"))
+    cmd = runner.build_command("vcp-screener")
+
+    assert "--universe" in cmd
+    assert "AAPL" in cmd
+    assert "MSFT" in cmd
+    assert "TSLA" in cmd  # weakening still included
+
+
+def test_vcp_screener_skips_universe_when_file_missing(tmp_path):
+    """SkillsRunner does not pass --universe when vcp-universe.json is absent."""
+    from skills_runner import SkillsRunner
+
+    runner = SkillsRunner(cache_dir=tmp_path, skills_root=Path("/fake"))
+    cmd = runner.build_command("vcp-screener")
+
+    assert "--universe" not in cmd
