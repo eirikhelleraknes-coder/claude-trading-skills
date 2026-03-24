@@ -188,11 +188,13 @@ def test_calculate_ema_returns_float():
          patch.dict(os.environ, _FAKE_ENV):
         client = AlpacaDataClient()
 
-    # 10 prices, period=3, most-recent-first
+    # 10 prices, period=3, most-recent-first → chronological: [1..10]
+    # SMA seed over first 3: (1+2+3)/3 = 2.0; k=0.5
+    # EMA after remaining 7: converges to ~9.0
     prices = [10.0, 9.0, 8.0, 7.0, 6.0, 5.0, 4.0, 3.0, 2.0, 1.0]
     result = client.calculate_ema(prices, period=3)
     assert isinstance(result, float)
-    assert result > 0
+    assert result == pytest.approx(9.0, rel=1e-2)
 
 
 def test_calculate_ema_returns_zero_for_insufficient_data():
