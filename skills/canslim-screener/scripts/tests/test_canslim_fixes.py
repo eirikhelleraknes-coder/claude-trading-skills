@@ -525,3 +525,123 @@ class TestBenchmarkScaleConsistency:
             f"Historical prices should NOT use SPY (scale mismatch with ^GSPC quote), "
             f"found tickers: {market_hist_tickers}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Regression: analyze_stock must use price_client (Alpaca), not client (FMP)
+# ---------------------------------------------------------------------------
+
+
+class TestAnalyzeStockAlpacaWiring:
+    """Ensure that analyze_stock routes price/historical calls to price_client
+    (AlpacaDataClient) and never to client (FMPClient).
+
+    This guards against a regression where get_quote or get_historical_prices
+    accidentally go back to FMP after the Alpaca migration.
+    """
+
+    @staticmethod
+    def _make_quote():
+        """Minimal quote dict accepted by calculate_newness and the rest of the pipeline."""
+        return [
+            {
+                "price": 150.0,
+                "yearHigh": 200.0,
+                "yearLow": 100.0,
+                "volume": 10_000_000,
+                "avgVolume": 8_000_000,
+            }
+        ]
+
+    @staticmethod
+    def _make_historical(days=90):
+        """Minimal historical prices dict (FMP-style with 'historical' key)."""
+        return {
+            "historical": [
+                {"close": 148.0 + i * 0.1, "volume": 9_000_000}
+                for i in range(days)
+            ]
+        }
+
+    def test_price_client_get_quote_is_called(self):
+        """price_client.get_quote must be called (not client.get_quote)."""
+        from unittest.mock import MagicMock, patch
+        from screen_canslim import analyze_stock
+
+        fmp_client = MagicMock()
+        fmp_client.get_profile.return_value = [
+            {"companyName": "Test Co", "sector": "Technology", "mktCap": 1_000_000_000}
+        ]
+        fmp_client.get_income_statement.return_value = None
+        fmp_client.get_institutional_holders.return_value = None
+
+        alpaca_client = MagicMock()
+        alpaca_client.get_quote.return_value = self._make_quote()
+        alpaca_client.get_historical_prices.return_value = self._make_historical()
+
+        market_data = {"score": 70, "trend": "uptrend", "sp500_price": 5000.0,
+                       "interpretation": "Uptrend"}
+        sp500_historical = self._make_historical(days=365)
+
+        result = analyze_stock("AAPL", fmp_client, alpaca_client, market_data, sp500_historical)
+
+        alpaca_client.get_quote.assert_called()
+        fmp_client.get_quote.assert_not_called()
+
+    def test_price_client_get_historical_prices_is_called(self):
+        """price_client.get_historical_prices must be called (not client.get_historical_prices)."""
+        from unittest.mock import MagicMock
+        from screen_canslim import analyze_stock
+
+        fmp_client = MagicMock()
+        fmp_client.get_profile.return_value = [
+            {"companyName": "Test Co", "sector": "Technology", "mktCap": 1_000_000_000}
+        ]
+        fmp_client.get_income_statement.return_value = None
+        fmp_client.get_institutional_holders.return_value = None
+
+        alpaca_client = MagicMock()
+        alpaca_client.get_quote.return_value = self._make_quote()
+        alpaca_client.get_historical_prices.return_value = self._make_historical()
+
+        market_data = {"score": 70, "trend": "uptrend", "sp500_price": 5000.0,
+                       "interpretation": "Uptrend"}
+        sp500_historical = self._make_historical(days=365)
+
+        result = analyze_stock("AAPL", fmp_client, alpaca_client, market_data, sp500_historical)
+
+        alpaca_client.get_historical_prices.assert_called()
+        fmp_client.get_historical_prices.assert_not_called()
+
+    def test_both_price_calls_go_to_alpaca_in_one_call(self):
+        """Single end-to-end check: both get_quote and get_historical_prices hit price_client."""
+        from unittest.mock import MagicMock, call
+        from screen_canslim import analyze_stock
+
+        fmp_client = MagicMock()
+        fmp_client.get_profile.return_value = [
+            {"companyName": "Test Co", "sector": "Technology", "mktCap": 1_000_000_000}
+        ]
+        fmp_client.get_income_statement.return_value = None
+        fmp_client.get_institutional_holders.return_value = None
+
+        alpaca_client = MagicMock()
+        alpaca_client.get_quote.return_value = self._make_quote()
+        alpaca_client.get_historical_prices.return_value = self._make_historical()
+
+        market_data = {"score": 70, "trend": "uptrend", "sp500_price": 5000.0,
+                       "interpretation": "Uptrend"}
+        sp500_historical = self._make_historical(days=365)
+
+        result = analyze_stock("MSFT", fmp_client, alpaca_client, market_data, sp500_historical)
+
+        # price_client received both types of calls
+        assert alpaca_client.get_quote.call_count >= 1, (
+            "price_client.get_quote should be called at least once"
+        )
+        assert alpaca_client.get_historical_prices.call_count >= 1, (
+            "price_client.get_historical_prices should be called at least once"
+        )
+        # FMP client must not have received any price-related calls
+        fmp_client.get_quote.assert_not_called()
+        fmp_client.get_historical_prices.assert_not_called()

@@ -131,6 +131,7 @@ def analyze_stock(
     Args:
         symbol: Stock ticker
         client: FMP API client
+        price_client: AlpacaDataClient instance for price/historical data
         market_data: Pre-calculated market direction data
         sp500_historical: S&P 500 historical prices for L component RS calculation
 
