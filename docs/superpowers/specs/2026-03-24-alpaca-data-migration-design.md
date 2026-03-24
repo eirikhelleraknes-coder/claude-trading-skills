@@ -13,7 +13,7 @@ The VCP screener makes ~600 FMP calls per run, far exceeding the 250/day free ti
 Add `AlpacaDataClient` to each screener. Alpaca provides historical OHLCV bars and snapshot quotes with no hard daily call limit on the free tier.
 
 - **VCP screener**: full replacement — `alpaca_data_client.py` replaces `fmp_client.py` entirely. Zero FMP calls.
-- **CANSLIM screener**: partial replacement — `alpaca_data_client.py` handles price/historical data; `fmp_client.py` stays for fundamental data (income statements, institutional holders, company profile). Reduces CANSLIM FMP usage from ~283 to ~120 calls/day.
+- **CANSLIM screener**: partial replacement — `alpaca_data_client.py` handles price/historical data; `fmp_client.py` stays for fundamental data (income statements, institutional holders, company profile). Reduces CANSLIM FMP usage from ~283 to ~123 calls/day.
 
 ---
 
@@ -23,21 +23,25 @@ Add `AlpacaDataClient` to each screener. Alpaca provides historical OHLCV bars a
 
 **`skills/vcp-screener/scripts/alpaca_data_client.py`**
 - Class: `AlpacaDataClient`
-- Methods (same signatures and return formats as current `FMPClient`):
-  - `get_historical_prices(symbol, days=365)` → `{"symbol": str, "historical": [{"date", "open", "high", "low", "close", "volume"}]}` (most-recent-first)
-  - `get_batch_historical(symbols, days=260)` → `{symbol: historical_list}`
-  - `get_quote(symbols)` → `[{"symbol", "price", "yearHigh", "yearLow", "volume", "avgVolume"}]`
-  - `get_batch_quotes(symbols)` → `{symbol: quote_dict}`
+- Methods:
+  - `get_historical_prices(symbol: str, days: int = 365)` → `{"symbol": str, "historical": [{"date", "open", "high", "low", "close", "volume"}]}` (most-recent-first)
+  - `get_batch_historical(symbols: list[str], days: int = 260)` → `{symbol: historical_list}`
+  - `get_quote(symbol: str)` → `[{"symbol", "price", "yearHigh", "yearLow", "volume", "avgVolume"}]` (list with one entry, matching FMP signature)
+  - `get_batch_quotes(symbols: list[str])` → `{symbol: quote_dict}`
+  - `get_api_stats()` → `{"cache_entries": int, "api_calls_made": int}` (for screener reporting)
   - `get_sp500_constituents()` → not needed (VCP uses `--universe` flag); raises `NotImplementedError`
 - Reads `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` from environment
 - Uses `alpaca.data.historical.StockHistoricalDataClient`
-- Uses `StockBarsRequest` (TimeFrame.Day) for historical data
-- Uses `StockSnapshotRequest` for quotes (provides latest price, daily bar for volume, 52-week high/low computed from bars)
-- If Alpaca returns no data for a symbol, skips it silently (same as current FMP fallback behaviour)
+- Uses `StockBarsRequest` (TimeFrame.Day) for historical bars
+- Uses `StockLatestQuoteRequest` for current price (more reliable than snapshots for equities)
+- `yearHigh` and `yearLow` computed from 365-day bar data (cached per symbol to avoid double-fetching)
+- `avgVolume` computed as mean of last 30 trading days' volume from bar data
+- If Alpaca returns no data for a symbol, returns empty result; caller skips it silently
 
 **`skills/canslim-screener/scripts/alpaca_data_client.py`**
 - Same class and methods as VCP version
-- `yearHigh` and `yearLow` computed from 365-day bar data (no separate FMP quote call needed for these)
+- Additionally includes `calculate_ema(prices: list[float], period: int) → float` (used by CANSLIM's leadership calculator)
+- Index symbols (`^GSPC`, `^VIX`) are not supported by Alpaca — `get_quote("^GSPC")` and `get_quote("^VIX")` fall back to yfinance (already available as a dependency)
 
 ### Modified Files
 
@@ -49,7 +53,7 @@ Add `AlpacaDataClient` to each screener. Alpaca provides historical OHLCV bars a
 **`skills/canslim-screener/scripts/screen_canslim.py`**
 - Add import: `from alpaca_data_client import AlpacaDataClient`
 - Keep import: `from fmp_client import FMPClient`
-- Replace price/historical calls with `AlpacaDataClient`
+- Replace `get_quote()` and `get_historical_prices()` calls with `AlpacaDataClient`
 - Keep income statement, institutional holder, and profile calls on `FMPClient`
 
 ---
@@ -59,7 +63,7 @@ Add `AlpacaDataClient` to each screener. Alpaca provides historical OHLCV bars a
 ### VCP Screener (after migration)
 ```
 screen_vcp.py
-  → AlpacaDataClient.get_batch_quotes(symbols)       # Alpaca snapshots
+  → AlpacaDataClient.get_batch_quotes(symbols)       # Alpaca latest quotes
   → AlpacaDataClient.get_historical_prices("SPY")    # Alpaca bars (260 days)
   → AlpacaDataClient.get_batch_historical(symbols)   # Alpaca bars (260 days)
   → [zero FMP calls]
@@ -68,7 +72,9 @@ screen_vcp.py
 ### CANSLIM Screener (after migration)
 ```
 screen_canslim.py
-  → AlpacaDataClient.get_quote(symbol)               # Alpaca snapshot
+  → AlpacaDataClient.get_quote("^GSPC")              # yfinance fallback (index)
+  → AlpacaDataClient.get_quote("^VIX")               # yfinance fallback (index)
+  → AlpacaDataClient.get_quote(symbol)               # Alpaca latest quote (equities)
   → AlpacaDataClient.get_historical_prices(symbol)   # Alpaca bars
   → FMPClient.get_income_statement(symbol)           # FMP (kept)
   → FMPClient.get_institutional_holders(symbol)      # FMP (kept)
@@ -83,8 +89,8 @@ screen_canslim.py
 |-----------|--------------|-----------------|
 | Universe builder nightly batch | ~42 | 0 |
 | VCP screener (50–100 stocks) | 0 | ~100–200 |
-| CANSLIM screener (40 stocks) | ~120 | ~80 |
-| **Total FMP** | **~162** | — |
+| CANSLIM screener (40 stocks + 3 market symbols) | ~123 | ~83 |
+| **Total FMP** | **~165** | — |
 | **vs. 250 free tier limit** | **✅ within** | — |
 
 ---
@@ -103,18 +109,16 @@ Both clients return data in FMP-compatible format so screener logic is unchanged
     ]
 }
 
-# Quote
-{
+# Quote (get_quote returns a list; get_batch_quotes returns a dict keyed by symbol)
+[{
     "symbol": "AAPL",
     "price": 171.5,
-    "yearHigh": 180.0,
-    "yearLow": 140.0,
-    "volume": 45000000,
-    "avgVolume": 48000000,
-}
+    "yearHigh": 180.0,   # max(close) over last 365 days from bar cache
+    "yearLow": 140.0,    # min(close) over last 365 days from bar cache
+    "volume": 45000000,  # today's volume from latest bar
+    "avgVolume": 48000000,  # mean volume over last 30 bars
+}]
 ```
-
-`yearHigh` and `yearLow` are computed from the 365-day bar data fetched during historical price calls (cached to avoid double-fetching).
 
 ---
 
@@ -122,6 +126,7 @@ Both clients return data in FMP-compatible format so screener logic is unchanged
 
 - Missing `ALPACA_API_KEY` or `ALPACA_SECRET_KEY` → raise `EnvironmentError` with clear message at client instantiation
 - Symbol not found or delisted → return empty list/dict for that symbol; caller skips it
+- Index symbols (`^GSPC`, `^VIX`) → fall back to yfinance automatically; log to stderr if yfinance also fails
 - Alpaca rate limit → `alpaca-py` SDK handles retries automatically
 - Network error → log to stderr, return empty result for affected symbols
 
