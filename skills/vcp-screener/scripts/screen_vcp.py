@@ -6,8 +6,8 @@ Screens S&P 500 stocks for Mark Minervini's Volatility Contraction Pattern (VCP)
 Uses a 3-phase pipeline: Pre-filter -> Trend Template -> VCP Detection & Scoring.
 
 Usage:
-    # Default (S&P 500, top 100 candidates, free tier API)
-    python3 screen_vcp.py --api-key YOUR_KEY
+    # Default (S&P 500, top 100 candidates)
+    python3 screen_vcp.py
 
     # Custom universe
     python3 screen_vcp.py --universe AAPL NVDA MSFT AMZN META
@@ -49,9 +49,6 @@ def parse_arguments():
         description="VCP Stock Screener - Minervini Volatility Contraction Pattern"
     )
 
-    parser.add_argument(
-        "--api-key", help="FMP API key (defaults to FMP_API_KEY environment variable)"
-    )
     parser.add_argument(
         "--max-candidates",
         type=int,
