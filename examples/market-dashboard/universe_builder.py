@@ -33,12 +33,12 @@ class UniverseBuilder:
     Inject ibkr_client in production. Pass request_delay=0 in tests.
     """
 
-    _FINVIZ_FILTERS = [
-        "ta_sma50_pa",
-        "ta_sma200_pa",
-        "sh_avgvol_o500",
-        "ta_perf3m_o5",
-    ]
+    _FINVIZ_FILTERS = {
+        '50-Day Simple Moving Average': 'Price above SMA50',
+        '200-Day Simple Moving Average': 'Price above SMA200',
+        'Average Volume': 'Over 500K',
+        'Performance': 'Quarter +10%',
+    }
 
     def __init__(self, ibkr_client, cache_dir: Path, request_delay: float = 6.0):
         self._ibkr = ibkr_client
@@ -161,8 +161,9 @@ class UniverseBuilder:
 
         try:
             fvscreen = Overview()
-            fvscreen.set_filter(filters_dict={f: True for f in self._FINVIZ_FILTERS})
-        except Exception:
+            fvscreen.set_filter(filters_dict=self._FINVIZ_FILTERS)
+        except Exception as e:
+            print(f"[universe_builder] FINVIZ filter setup failed: {e} — falling back to unfiltered", file=sys.stderr)
             fvscreen = Overview()
 
         try:
@@ -196,6 +197,7 @@ class UniverseBuilder:
             "candidates": candidates,
             "scanned_count": 0,
         }
+        self._cache_dir.mkdir(parents=True, exist_ok=True)
         queue_file = self._cache_dir / "universe-queue.json"
         queue_file.write_text(json.dumps(output, indent=2))
         print(f"[universe_builder] queue built: {len(candidates)} candidates", file=sys.stderr)

@@ -260,3 +260,19 @@ def test_build_queue_works_without_finnhub_key():
 
     data = json.loads((cache_dir / "universe-queue.json").read_text())
     assert data["candidates"][0]["sentiment_score"] == 0.5
+
+
+def test_build_queue_returns_empty_when_finviz_fails():
+    """build_queue returns [] and does not raise when FINVIZ screener_view throws."""
+    from universe_builder import UniverseBuilder
+    mock_ibkr = MagicMock()
+    mock_ibkr.is_configured = False
+    cache_dir = Path(tempfile.mkdtemp())
+
+    with patch("universe_builder.Overview") as mock_overview:
+        mock_overview.return_value.screener_view.side_effect = Exception("network error")
+        builder = UniverseBuilder(ibkr_client=mock_ibkr, cache_dir=cache_dir)
+        result = builder.build_queue(finnhub_api_key="")
+
+    assert result == []
+    assert not (cache_dir / "universe-queue.json").exists()
