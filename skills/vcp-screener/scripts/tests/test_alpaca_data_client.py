@@ -176,4 +176,4 @@ def test_get_historical_prices_empty_when_no_data():
         client = AlpacaDataClient()
         result = client.get_historical_prices("FAKE", days=30)
 
-    assert result is None or result["historical"] == []
+    assert result is None
