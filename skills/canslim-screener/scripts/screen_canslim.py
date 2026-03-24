@@ -30,6 +30,7 @@ from calculators.leadership_calculator import calculate_leadership
 from calculators.market_calculator import calculate_market_direction
 from calculators.new_highs_calculator import calculate_newness
 from calculators.supply_demand_calculator import calculate_supply_demand
+from alpaca_data_client import AlpacaDataClient
 from fmp_client import FMPClient
 from report_generator import generate_json_report, generate_markdown_report
 from scorer import (
@@ -122,7 +123,7 @@ def parse_arguments():
 
 
 def analyze_stock(
-    symbol: str, client: FMPClient, market_data: dict, sp500_historical: list[dict] = None
+    symbol: str, client: FMPClient, price_client: AlpacaDataClient, market_data: dict, sp500_historical: list[dict] = None
 ) -> Optional[dict]:
     """
     Analyze a single stock using CANSLIM Phase 3 components (7 components: C, A, N, S, L, I, M)
@@ -150,7 +151,7 @@ def analyze_stock(
         market_cap = profile[0].get("mktCap", 0)
 
         # Get quote
-        quote = client.get_quote(symbol)
+        quote = price_client.get_quote(symbol)
         if not quote:
             print("✗ Quote unavailable")
             return None
@@ -177,7 +178,7 @@ def analyze_stock(
         n_result = calculate_newness(quote[0])
 
         # S Component: Supply/Demand (uses existing historical_prices data - no extra API call)
-        historical_prices = client.get_historical_prices(symbol, days=90)
+        historical_prices = price_client.get_historical_prices(symbol, days=90)
         s_result = (
             calculate_supply_demand(historical_prices)
             if historical_prices
@@ -186,7 +187,7 @@ def analyze_stock(
 
         # L Component: Leadership / Relative Strength (52-week performance vs S&P 500)
         # Use 365-day historical data for full year comparison
-        historical_prices_52w_data = client.get_historical_prices(symbol, days=365)
+        historical_prices_52w_data = price_client.get_historical_prices(symbol, days=365)
         # Extract 'historical' list from FMP response format
         historical_prices_52w = (
             historical_prices_52w_data.get("historical", []) if historical_prices_52w_data else []
@@ -283,6 +284,14 @@ def main():
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
+    # Initialize Alpaca price client (for quotes and historical price data)
+    try:
+        price_client = AlpacaDataClient()
+        print("✓ Alpaca price client initialized")
+    except EnvironmentError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+
     # Determine universe
     if args.universe:
         universe = args.universe[: args.max_candidates]
@@ -297,8 +306,8 @@ def main():
     print("Step 1: Analyzing Market Direction (M Component)")
     print("-" * 60)
 
-    sp500_quote = client.get_quote("^GSPC")
-    vix_quote = client.get_quote("^VIX")
+    sp500_quote = price_client.get_quote("^GSPC")
+    vix_quote = price_client.get_quote("^VIX")
 
     if not sp500_quote:
         print("ERROR: Unable to fetch S&P 500 data", file=sys.stderr)
@@ -306,7 +315,7 @@ def main():
 
     # Fetch S&P 500 historical prices (used by both M and L components)
     print("Fetching S&P 500 52-week data for M (EMA) and L (Relative Strength) components...")
-    sp500_historical = client.get_historical_prices(
+    sp500_historical = price_client.get_historical_prices(
         "^GSPC", days=365
     )  # Must match ^GSPC quote for M component EMA
     if sp500_historical and sp500_historical.get("historical"):
@@ -344,7 +353,7 @@ def main():
 
     results = []
     for symbol in universe:
-        analysis = analyze_stock(symbol, client, market_data, sp500_historical)
+        analysis = analyze_stock(symbol, client, price_client, market_data, sp500_historical)
         if analysis:
             results.append(analysis)
 

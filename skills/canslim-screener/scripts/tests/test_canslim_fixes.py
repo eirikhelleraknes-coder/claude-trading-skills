@@ -501,14 +501,15 @@ class TestBenchmarkScaleConsistency:
             content = f.read()
 
         # Find all get_historical_prices calls for S&P 500 / market data
+        # After Alpaca migration, these calls are on price_client
         hist_calls = re.findall(
-            r'client\.get_historical_prices\(\s*["\']([^"\']+)["\']',
+            r'price_client\.get_historical_prices\(\s*["\']([^"\']+)["\']',
             content,
         )
 
-        # Find the quote call for S&P 500
+        # Find the quote call for S&P 500 (also on price_client after migration)
         quote_calls = re.findall(
-            r'client\.get_quote\(\s*["\'](\^GSPC[^"\']*)["\']',
+            r'price_client\.get_quote\(\s*["\'](\^GSPC[^"\']*)["\']',
             content,
         )
 
