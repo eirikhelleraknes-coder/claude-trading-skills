@@ -39,7 +39,7 @@ from calculators.relative_strength_calculator import (
 from calculators.trend_template_calculator import calculate_trend_template
 from calculators.vcp_pattern_calculator import calculate_vcp_pattern
 from calculators.volume_pattern_calculator import calculate_volume_pattern
-from fmp_client import FMPClient
+from alpaca_data_client import AlpacaDataClient
 from report_generator import generate_json_report, generate_markdown_report
 from scorer import calculate_composite_score
 
@@ -490,10 +490,10 @@ def main():
     print("=" * 70)
     print()
 
-    # Initialize FMP client
+    # Initialize Alpaca data client
     try:
-        client = FMPClient(api_key=args.api_key)
-        print("FMP API client initialized")
+        client = AlpacaDataClient()
+        print("Alpaca data client initialized")
     except ValueError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         sys.exit(1)
